@@ -1,0 +1,92 @@
+PROJE ÖN RAPORU: NoteSync
+1. Proje Tanımı
+• Proje Adı: NoteSync: Çok Katmanlı Güvenli Not Alma ve Dinamik
+Paylaşım Platformu.
+• Projenin Amacı: Kullanıcıların notlarını Markdown, RTF veya
+HTML gibi farklı formatlarda alabilmesini sağlamak, bu verileri
+cihaz bazlı şifreleyerek yerelde saklamak ve gerektiğinde güvenli
+bir API üzerinden seçili içerikleri paylaşabilmektir.
+• Çözdüğü Problem: Mevcut uygulamaların ya tamamen bulut
+tabanlı olup gizlilik riski taşıması ya da sadece çevrimdışı çalışarak
+iş birliğini kısıtlaması sorununu "hibrit veri yapısı" ile çözmektedir.
+2. Hedef Kitle
+• Kullanıcı Profili: Akademik çalışma yürüten öğrenciler, kişisel veri
+gizliliğine önem veren bireyler ve ortak proje yürüten
+profesyoneller.
+• Kullanıcı İhtiyaçları: Veri mülkiyetinin kullanıcıda kalması, notların
+profesyonel formatlarda (PDF/Word) dışa aktarılması ve paylaşılan
+içeriklerin şifre ile korunması ihtiyacı.
+3. Kullanılacak Yapay Zekâ Araçları
+Araç Listesi:
+• Codex 5.3 → Backend (Node.js API), veri akışı, şifreleme ve
+sistem mimarisinin oluşturulması
+• Gemini 3.1 Pro → Arayüz tasarımı, layout planlama ve kullanıcı
+deneyimi (UX) kararlarının oluşturulması
+Kullanım Amaçları:
+• Codex 5.3, uygulamanın backend mimarisini kurmak, API
+endpoint’lerini oluşturmak ve güvenli veri işleme süreçlerini
+geliştirmek için kullanılacaktır.
+• Gemini 3.1 Pro ise uygulamanın görsel düzeni, ekran yerleşimleri
+ve kullanıcı akışlarını tasarlamak için kullanılacaktır. 
+Not: Projede Figma veya harici tasarım araçları kullanılmayacak, tasarım
+süreci doğrudan yapay zekâ destekli olarak ilerletilecektir.
+4. Tasarım Yaklaşımı (UX/UI)
+• Kullanıcı Deneyimi (UX):
+Gemini 3.1 Pro kullanılarak kullanıcı akışları optimize edilmiş,
+minimum adımda not oluşturma ve paylaşma hedeflenmiştir.
+• Arayüz Tasarımı (UI):
+Tasarım süreci manuel çizim araçları yerine yapay zekâ destekli
+olarak planlanmış, modern ve kart tabanlı (card-based) bir yapı
+benimsenmiştir.
+5. Teknolojik Altyapı
+• Kullanılacak Teknolojiler: React Native / Expo (Mobil Client),
+Node.js (API), MySQL (Merkezi DB), SQLite (Yerel DB), AES-256-GCM
+(Şifreleme).
+• Platform (Web / Mobil vs.): İlk aşamada Android ve iOS üzerinde
+çalışan çapraz platform yapı; ikinci aşamada React Native Windows
+veya Electron tabanlı Windows istemcisi.
+6. Görsel Tasarım ve Stil
+• Font Seçimi: Okunabilirliği yüksek, modern sans-serif yazı tipleri
+(örneğin Roboto veya Inter).
+• Renk Paleti: Güven ve profesyonelliği temsil eden Lacivert/Mavi
+tonları, odaklanmayı kolaylaştıran "Dark Mode" desteği ile birlikte.
+• Tasarım Dili: Minimalist, kart (card-based) yapısına dayalı ve
+fonksiyonelliği ön plana çıkaran bir dil.
+7. Prototipleme Süreci
+• Wireframe: Gemini 3.1 Pro ile ekran yapıları ve layout planları
+oluşturulmuştur
+• Mockup: Yapay zekâ tarafından önerilen tasarım düzenleri
+doğrultusunda geliştirilmiştir 
+• Prototype: React Native üzerinde doğrudan kod ile
+oluşturulacaktır (Figma vb. araç kullanılmayacaktır)
+8. Geliştirme Planı
+• Aşamalar: 1. Veritabanı yapısının ve API mimarisinin kurulması. 2.
+React Native ile mobil arayüz tasarımlarının kodlanması. 3.
+AES-256-GCM şifreleme ve yerel depolama entegrasyonu. 4.
+Paylaşım servisleri ve URL üretim mekanizmasının testi.
+• Süreç Akışı: Tasarım -> Backend Geliştirme -> Client
+Entegrasyonu -> Güvenlik Testleri.
+9. Beklenen Sonuç ve Çıktılar
+• Projenin Sağlayacağı Fayda: Kullanıcılara dijital notları üzerinde
+tam kontrol verirken, güvenlikten ödün vermeden iş birliği
+yapabilmelerini sağlar.
+• Nihai Ürün Tanımı: Şifreli linklerle paylaşım yapabilen, PDF/Word
+çıktısı veren ve farklı platformlarda senkronize çalışabilen hibrit bir
+not platformu
+10. Güvenlik ve Veri Gizliliği
+Bunu ekle:
+· Veri Güvenliği: Kullanıcı notları AES-256 şifreleme algoritması ile
+korunmaktadır.
+· Veri Mülkiyeti: Paylaşılmayan veriler tamamen kullanıcı cihazında
+saklanır.
+· Erişim Kontrolü: Paylaşılan notlar için URL + ek şifre doğrulaması
+uygulanır.
+· Oturum Yönetimi: API tarafında JWT tabanlı kimlik doğrulama
+kullanılacaktır.
+11. Performans ve Ölçeklenebilirlik
+· Sistem, Node.js tabanlı API sayesinde yüksek eşzamanlı kullanıcı
+taleplerini karşılayabilecek şekilde tasarlanmıştır.
+· Yerel depolama (SQLite) kullanımı sayesinde offline performans
+optimize edilmiştir.
+· Mikroservis mimarisine uygun şekilde genişletilebilir bir yapı
+hedeflenmiştir.

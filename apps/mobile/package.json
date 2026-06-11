@@ -1,0 +1,9 @@
+{
+  "name": "@notesync/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "expo start",
+    "build": "echo \"Mobile build configuration will be added after Expo init.\""
+  }
+}
