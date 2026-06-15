@@ -1,8 +1,18 @@
-export function bootstrap() {
-  return {
-    service: "notesync-api",
-    status: "scaffolded"
-  };
+import { createApp } from "./app";
+import { config } from "./config";
+
+async function start() {
+  const app = createApp();
+
+  try {
+    await app.listen({
+      port: config.port,
+      host: config.host
+    });
+  } catch (error) {
+    app.log.error(error);
+    process.exit(1);
+  }
 }
 
-console.log(bootstrap());
+void start();

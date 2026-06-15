@@ -1,0 +1,9 @@
+{
+  "expo": {
+    "name": "NoteSync",
+    "slug": "notesync",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark"
+  }
+}

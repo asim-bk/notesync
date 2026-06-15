@@ -4,6 +4,15 @@
   "private": true,
   "scripts": {
     "start": "expo start",
-    "build": "echo \"Mobile build configuration will be added after Expo init.\""
+    "build": "echo \"Use eas build or expo prebuild after installing dependencies.\""
+  },
+  "dependencies": {
+    "expo": "^53.0.0",
+    "react": "^19.0.0",
+    "react-native": "^0.79.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "typescript": "^5.8.0"
   }
 }

@@ -9,6 +9,11 @@
   "scripts": {
     "dev:api": "npm --workspace @notesync/api run dev",
     "dev:mobile": "npm --workspace @notesync/mobile run start",
-    "build": "npm run build --workspaces"
+    "build": "npm --workspace @notesync/shared-types run build && npm --workspace @notesync/note-domain run build && npm --workspace @notesync/crypto-core run build && npm --workspace @notesync/api run build && npm --workspace @notesync/mobile run build"
+  },
+  "dependencies": {
+    "@expo/metro-runtime": "~5.0.5",
+    "react-dom": "19.0.0",
+    "react-native-web": "^0.20.0"
   }
 }
