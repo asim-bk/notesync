@@ -6,9 +6,9 @@ import type {
   NoteSummary,
   ShareRecord
 } from "@notesync/shared-types";
-import { createEmptyDraft } from "@notesync/note-domain";
-import { encryptNoteContent } from "@notesync/crypto-core";
 import { LocalNoteRepository } from "../data/local-note-repository";
+import { createEmptyDraft, buildEncryptedSeed } from "../lib/note-utils";
+import { encryptNoteContent } from "../lib/web-crypto";
 
 const repository = new LocalNoteRepository();
 const DEVICE_SECRET = "local-demo-device-secret";
@@ -134,13 +134,7 @@ function seedInitialDraft(): NoteDraft {
           "This is a sample encrypted note.\n\n- Stored locally first\n- Ready to share later",
         format: "markdown"
       },
-      {
-        cipherText: "seed",
-        iv: "seed",
-        salt: "seed",
-        algorithm: "AES-256-GCM",
-        version: 1
-      }
+      buildEncryptedSeed()
     );
   }
 

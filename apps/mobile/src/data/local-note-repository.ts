@@ -4,8 +4,8 @@ import type {
   NoteRecord,
   NoteSummary
 } from "@notesync/shared-types";
-import { buildCreateNoteInput, sortNotesByUpdatedAt, toNoteSummary } from "@notesync/note-domain";
 import { createLocalId } from "../lib/id";
+import { buildNoteSummary, sortNoteSummaries } from "../lib/note-utils";
 
 interface StoredNote {
   note: NoteRecord;
@@ -17,9 +17,9 @@ export class LocalNoteRepository {
 
   listSummaries(): NoteSummary[] {
     const summaries = [...this.notes.values()].map(({ note, decryptedContent }) =>
-      toNoteSummary(note, decryptedContent)
+      buildNoteSummary(note, decryptedContent)
     );
-    return sortNotesByUpdatedAt(summaries);
+    return sortNoteSummaries(summaries);
   }
 
   getById(noteId: string): StoredNote | undefined {
@@ -31,14 +31,13 @@ export class LocalNoteRepository {
     draft: NoteDraft,
     encryptedContent: EncryptedNoteContent
   ): NoteRecord {
-    const input = buildCreateNoteInput(encryptedContent, draft);
     const now = new Date().toISOString();
     const note: NoteRecord = {
       id: createLocalId("note"),
       ownerId,
-      title: input.title,
-      format: input.format,
-      encryptedContent: input.encryptedContent,
+      title: draft.title.trim() || "Untitled note",
+      format: draft.format,
+      encryptedContent,
       status: "active",
       createdAt: now,
       updatedAt: now,
