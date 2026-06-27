@@ -1,49 +1,54 @@
 # NoteSync
 
-NoteSync, kullanicinin notlarini yerelde sifreleyip saklayan ve secilen icerikleri guvenli sekilde paylasabilen hibrit bir not platformudur.
+NoteSync, notlari cihazda sifreleyerek saklayan, istenirse hesap ile senkronize eden ve secili notlari guvenli linklerle paylasabilen local-first bir not platformudur.
 
-Bu repo, projeyi `.NET MAUI` yerine `React Native` merkezli bir mimariyle baslatmak icin hazirlandi.
+Bu repo, `project.txt` icindeki NoteSync on raporunu `.NET MAUI` yerine `React Native + Expo` merkezli bir mimariyle hayata geciren monorepo yapisidir.
 
-## Hedef Mimari
+## Proje Ozeti
 
-Ana kararlar:
+Hedef problem:
 
-- Mobil istemci: `React Native + Expo + TypeScript`
-- API: `Node.js + Fastify + TypeScript`
-- Yerel veritabani: `SQLite`
-- Merkezi veritabani: `MySQL`
-- Kimlik dogrulama: `JWT`
-- Not sifreleme: `AES-256-GCM`
-- Ortak is kurallari ve tipler: monorepo icindeki paylasilan paketler
+- tam bulut tabanli not uygulamalarinda veri gizliligi riski
+- sadece offline calisan uygulamalarda paylasim ve es zamanlama eksikligi
 
-## Mevcut Durum
+NoteSync bu problemi hibrit veri modeli ile cozer:
 
-Bu repo artik sadece iskelet degil. Su akislari calisir durumda:
+- not icerigi once cihazda sifrelenir ve yerelde saklanir
+- kullanici isterse hesaba bagli senkronizasyon kullanir
+- secili notlar guvenli API uzerinden link ile paylasilabilir
 
-- local encrypted note kaydi
-- native `expo-sqlite` / web local persistence
-- `expo-secure-store` ile device secret
-- register / login / refresh / logout
-- auth rate limit
-- remote secure share olusturma ve slug + password ile acma
-- Markdown / HTML / RTF format degistirme
-- PDF / DOCX / Markdown / HTML / RTF export
-- local sync queue ve manuel account sync
-- Prisma + MySQL persistence path
-- test ve CI workflow
+Hedef kullanicilar:
 
-## Neden MAUI Degil?
+- ogrenciler
+- akademik veya profesyonel calisma yurutup not tutanlar
+- veri gizliligine onem veren bireyler
 
-`React Native` tarafi, mobil gelistirme hizi, ekosistem ve ekip bulunabilirligi acisindan daha guclu bir tercih. Ancak burada bir teknik not var:
+## Mevcut Teknoloji Yigini
 
-- `Android` ve `iOS` icin React Native cok uygun.
-- `Windows` destegi gerekiyorsa iki yol var:
-  - `React Native Windows`
-  - ayri bir masaustu istemcisi (`Electron` veya `Tauri`) ve ortak domain paketleri
+Projede su anda kullanilan teknoloji:
 
-Bu repo icin mantikli ilk asama: mobil odakli bir cekirdek kurup backend ve sifreleme altyapisini dogru oturtmak.
+- mobil istemci: `React Native`, `Expo SDK 53`, `TypeScript`
+- web onizleme: `react-native-web`
+- yerel veri: native tarafta `expo-sqlite`, web tarafinda browser local persistence
+- cihaz sirri: `expo-secure-store`
+- API: `Node.js`, `Fastify`, `TypeScript`
+- kimlik dogrulama: `JWT` tabanli access + refresh token akisi
+- merkezi veritabani: `MySQL` + `Prisma`
+- sifreleme: `AES-256-GCM`
+- belge export: `pdf-lib`, `docx`
+- paylasim/kopyalama: `expo-sharing`, `expo-clipboard`
+- ortak paketler:
+  - `packages/shared-types`
+  - `packages/note-domain`
+  - `packages/crypto-core`
 
-## Klasor Yapisi
+Not:
+
+- Proje `React Native / Expo` tabanlidir.
+- `project.txt` icinde gecen mobil odak korunmustur.
+- Windows masaustu istemcisi bu repoda yoktur; ikinci asama hedefi olarak dusunulmelidir.
+
+## Repo Yapisi
 
 ```text
 .
@@ -52,107 +57,79 @@ Bu repo icin mantikli ilk asama: mobil odakli bir cekirdek kurup backend ve sifr
 │   └── mobile
 ├── packages
 │   ├── crypto-core
-│   ├── shared-types
-│   └── note-domain
-├── project.txt
-└── docs
-    └── architecture.md
+│   ├── note-domain
+│   └── shared-types
+├── docs
+│   ├── architecture.md
+│   ├── deployment.md
+│   └── implementation-plan.md
+└── project.txt
 ```
 
-## Katmanlar
+## Project.txt ile Uyumlu Mevcut Durum
 
-### `apps/mobile`
+Su anda calisan ana ozellikler:
 
-Mobil uygulama su sorumluluklari tasir:
+- [x] Markdown, HTML ve RTF formatinda not olusturma ve duzenleme
+- [x] not icerigini cihazda `AES-256-GCM` ile sifreleyip saklama
+- [x] native SQLite / web local persistence
+- [x] register / login / refresh / logout akisi
+- [x] hesap bagli manuel not senkronizasyonu
+- [x] uzaktan paylasim icin slug tabanli link uretimi
+- [x] opsiyonel sifre korumali paylasim
+- [x] paylasim gecmisi, link kopyalama ve sistem paylasim diyalogu
+- [x] PDF / DOCX / Markdown / HTML / RTF export
+- [x] not silme
+- [x] mobil odakli arayuz, not gridi ve animasyonlu yan menu
+- [x] Expo web uzerinden Android SDK olmadan onizleme
 
-- not olusturma ve duzenleme
-- offline veri erisimi
-- cihaz bazli sifreleme
-- paylasim akislari
-- disa aktarma tetikleme
+Henuz bu repoda olmayan veya sonraki asamaya kalan kisimlar:
 
-Onerilen kutuphaneler:
+- [ ] masaustu istemcisi
+- [ ] gelismis catisma cozum arayuzu
+- [ ] gercek zamanli ortak duzenleme
+- [ ] ileri seviye paylasim politikalarinin UI tarafinda genisletilmesi
 
-- `expo`
-- `expo-sqlite`
-- `expo-secure-store`
-- `@react-navigation/native`
-- `zustand`
-- `react-hook-form`
+## Guvenlik Modeli
 
-### `apps/api`
+`project.txt` icindeki guvenlik hedeflerine uygun mevcut model:
 
-API su gorevleri ustlenir:
+- not icerigi once cihazda sifrelenir
+- paylasilmayan veri kullanicinin cihazinda kalir
+- hesap senkronizasyonunda sunucuya duz metin degil sifreli icerik gider
+- paylasilan notlar slug ile erisilir, UI uzerinden opsiyonel sifre korumasi eklenebilir
+- API tarafinda JWT tabanli oturum yonetimi vardir
+- cihaz anahtari native ortamda `expo-secure-store` ile tutulur
 
-- kullanici kimlik dogrulama
-- paylasilan notlar icin link uretme
-- sifre korumali erisim denetimi
-- metadata senkronizasyonu
-- audit/log kayitlari
+## Tasarim ve UX Notlari
 
-Onerilen kutuphaneler:
+Mevcut mobil uygulama:
 
-- `fastify`
-- `@fastify/jwt`
-- `@fastify/cors`
-- `prisma` veya `drizzle`
+- koyu gri tonlarda bir shell
+- kagit renginde not kartlari
+- mobil onceleyen ana not gridi
+- animasyonlu side drawer
+- editor icinden hizli paylasim ve silme
+- `Shared` ekranindan not secip paylasma ve gecmis linkleri kopyalama
 
-### `packages/shared-types`
+Bu, `project.txt` icindeki dark mode, minimalist ve fonksiyon odakli tasarim niyetine yakindir; ancak bugunku uygulama klasik mavi/lacivert yerine koyu gri + kagit tonlariyla ilerlemektedir.
 
-API ve mobil istemci tarafinda ortak kullanilacak:
+## Gelistirme Ortami
 
-- DTO'lar
-- paylasim modelleri
-- auth tipleri
-- not format enum'lari
+Gerekenler:
 
-### `packages/note-domain`
+- Node.js
+- npm
+- Docker (kolay MySQL + API ayagi icin, opsiyonel)
 
-Is kurallari burada toplanir:
+Native build icin ayrica:
 
-- not donusumleri
-- paylasim politikasi
-- versiyonlama mantigi
-- editor bagimsiz veri modeli
+- Android Studio / Android SDK veya
+- Xcode / iOS toolchain
 
-### `packages/crypto-core`
+Sadece web onizleme icin bunlar zorunlu degildir.
 
-Sifreleme mantigi tek yerde tutulur:
-
-- anahtar turetme
-- icerik sifreleme/cozme
-- payload paketleme
-- versiyonlanmis sifreleme semasi
-
-## Veri Akisi
-
-1. Kullanici notu cihazda olusturur.
-2. Not icerigi cihaz anahtari ile sifrelenir.
-3. Sifreli veri `SQLite` uzerine yazilir.
-4. Kullanici paylasim isterse, API'ye yalnizca gerekli icerik/metaveri gonderilir.
-5. API paylasim baglantisi ve ek sifre dogrulamasi uretir.
-6. Alici, URL + sifre ile paylasilan notu acar.
-
-## Yol Haritasi
-
-1. Monorepo ve ortak tip paketlerini kur
-2. Node.js API iskeletini kur
-3. React Native mobil iskeletini kur
-4. Yerel sifreleme ve SQLite katmanini ekle
-5. Markdown/HTML/RTF not modelini netlestir
-6. Paylasim linki ve JWT akisini ekle
-7. PDF/Word export stratejisini tamamla
-
-## Kritik Teknik Kararlar
-
-- Notlari editor ham HTML'i olarak degil, normalize edilmis bir belge modeli olarak saklamak daha saglikli olur.
-- AES tarafinda `AES-256-GCM` tercih edilmeli; yalniz `AES-256` ifadesi eksik bir tanimdir.
-- Sifreleme anahtari dogrudan saklanmamali; cihaz guvenli alani + turetilmis anahtar modeli kullanilmali.
-- Ilk surumde tam gercek zamanli ortak duzenleme yerine guvenli paylasim odakli gitmek kapsam riskini azaltir.
-
-## Sonraki Adim
-
-## Calistirma
+## Kurulum
 
 ### 1. Bagimliliklar
 
@@ -160,35 +137,131 @@ Sifreleme mantigi tek yerde tutulur:
 npm install
 ```
 
-### 2. Sadece API
+### 2. En hizli baslangic: Docker ile API + MySQL
 
-```bash
-cp apps/api/.env.example apps/api/.env
-npm --workspace @notesync/api run dev
-```
-
-### 3. MySQL + API (Docker ile)
+Bu akista MySQL, Prisma migration ve demo seed birlikte ayaga kalkar:
 
 ```bash
 docker compose up --build
 ```
 
-### 4. Expo web
+API varsayilan olarak:
+
+- `http://localhost:4000`
+
+### 3. API'yi Docker olmadan calistirma
+
+Ornek ortam dosyasini olustur:
+
+```bash
+cp apps/api/.env.example apps/api/.env
+```
+
+Iki secenek var:
+
+1. Hafiza tabanli gelistirme:
+
+- `STORE_PROVIDER=memory`
+- sonra:
+
+```bash
+npm --workspace @notesync/api run dev
+```
+
+2. MySQL + Prisma:
+
+- `STORE_PROVIDER=prisma`
+- `DATABASE_URL` degerini ayarla
+- sonra:
+
+```bash
+npm --workspace @notesync/api run prisma:deploy
+npm --workspace @notesync/api run seed
+npm --workspace @notesync/api run dev
+```
+
+### 4. Mobil uygulamayi webde acma
+
+Android SDK olmadan web onizleme icin:
 
 ```bash
 EXPO_PUBLIC_API_BASE_URL=http://localhost:4000 npm run dev:web
 ```
 
-### 5. Testler
+### 5. Expo gelistirme sunucusu
+
+Mobil preview icin:
+
+```bash
+npm run dev:mobile
+```
+
+### 6. Testler
 
 ```bash
 npm test
 ```
 
-### 6. Build
+Bu komut sunlari calistirir:
+
+- domain testleri
+- API testleri
+- mobile local persistence testleri
+
+### 7. Build
+
+Monorepo build:
 
 ```bash
 npm run build
 ```
 
-Detayli deployment notlari icin: `docs/deployment.md`
+Not:
+
+- root `build` komutu ortak paketleri ve API'yi derler
+- mobile workspace icindeki `build` script'i native release bundle uretmez
+- native release icin `EAS Build` veya `expo prebuild` gerekir
+
+### 8. Web export
+
+Statik web paketi almak icin:
+
+```bash
+cd apps/mobile
+npx expo export --platform web --output-dir .expo/web-export
+```
+
+## Demo Hesap
+
+Seed calistirildiginda varsayilan demo hesap:
+
+- email: `demo@notesync.local`
+- password: `DemoPass123!`
+
+## Gelistirme Scriptleri
+
+Root seviyesinde sik kullanilan komutlar:
+
+```bash
+npm run dev:api
+npm run dev:mobile
+npm run dev:web
+npm test
+npm run build
+```
+
+## Dokumantasyon
+
+- mimari: [docs/architecture.md](docs/architecture.md)
+- deployment: [docs/deployment.md](docs/deployment.md)
+- uygulama plani: [docs/implementation-plan.md](docs/implementation-plan.md)
+- kaynak on rapor: [project.txt](project.txt)
+
+## Yol Haritasi
+
+`project.txt` dogrultusunda sonraki mantikli adimlar:
+
+1. sync conflict ekranlarini gelistirmek
+2. paylasim politikalarini zenginlestirmek
+3. masaustu istemcisi stratejisini netlestirmek
+4. daha guclu audit/log ve operasyonel izleme eklemek
