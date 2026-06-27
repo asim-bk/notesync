@@ -254,13 +254,13 @@ export function useNotesApp() {
 
   async function syncNow() {
     if (!deviceSecret) {
-      return;
+      return false;
     }
 
     const nextAuthState = await ensureFreshAuthState();
     if (!nextAuthState) {
       setStatusMessage("Sign in before running sync.");
-      return;
+      return false;
     }
 
     setLoading(true);
@@ -332,8 +332,10 @@ export function useNotesApp() {
           ? `Sync finished with ${conflictCount} deferred conflict(s).`
           : "Sync completed successfully."
       );
+      return true;
     } catch (cause) {
       setStatusMessage(getErrorMessage(cause));
+      return false;
     } finally {
       setLoading(false);
     }
@@ -428,8 +430,10 @@ export function useNotesApp() {
       setAuthState(nextAuthState);
       setSyncEnabled(true);
       setStatusMessage(authMode === "register" ? "Account created." : "Signed in.");
+      return true;
     } catch (cause) {
       setStatusMessage(getErrorMessage(cause));
+      return false;
     } finally {
       setLoading(false);
     }
@@ -535,10 +539,9 @@ export function useNotesApp() {
           syncEnabled: false
         });
         currentSummaries = await repository.listSummaries(secret);
-        await openNote(created.id, secret);
-        setScreen("editor");
+        await openNote(created.id, secret, "list");
       } else {
-        await openNote(currentSummaries[0].id, secret);
+        await openNote(currentSummaries[0].id, secret, "list");
       }
 
       setSummaries(currentSummaries);
@@ -557,7 +560,11 @@ export function useNotesApp() {
     setSummaries(nextSummaries);
   }
 
-  async function openNote(noteId: string, secretOverride?: string) {
+  async function openNote(
+    noteId: string,
+    secretOverride?: string,
+    nextScreen: ScreenState = "editor"
+  ) {
     const secret = secretOverride ?? deviceSecret;
     if (!secret) {
       return;
@@ -580,7 +587,7 @@ export function useNotesApp() {
       content: decryptedContent,
       format: note.format
     });
-    setScreen("editor");
+    setScreen(nextScreen);
   }
 
   async function ensureFreshAuthState(): Promise<StoredAuthState | null> {

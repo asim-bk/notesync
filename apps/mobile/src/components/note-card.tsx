@@ -1,3 +1,4 @@
+import type { StyleProp, ViewStyle } from "react-native";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { NoteSummary } from "@notesync/shared-types";
 import { colors } from "../theme";
@@ -5,23 +6,35 @@ import { colors } from "../theme";
 export function NoteCard(props: {
   note: NoteSummary;
   selected?: boolean;
+  compact?: boolean;
+  containerStyle?: StyleProp<ViewStyle>;
   onPress(): void;
 }) {
-  const { note, onPress, selected } = props;
+  const { note, onPress, selected, compact, containerStyle } = props;
 
   return (
-    <Pressable onPress={onPress} style={[styles.card, selected ? styles.cardSelected : null]}>
+    <Pressable
+      onPress={onPress}
+      style={[
+        styles.card,
+        compact ? styles.cardCompact : null,
+        selected ? styles.cardSelected : null,
+        containerStyle
+      ]}
+    >
       <View style={styles.row}>
-        <Text numberOfLines={1} style={styles.title}>
+        <Text numberOfLines={2} style={[styles.title, compact ? styles.titleCompact : null]}>
           {note.title}
         </Text>
-        <Text style={styles.badge}>{note.format.toUpperCase()}</Text>
+        {!compact ? <Text style={styles.badge}>{note.format.toUpperCase()}</Text> : null}
       </View>
-      <Text numberOfLines={2} style={styles.excerpt}>
+      <Text numberOfLines={compact ? 4 : 2} style={[styles.excerpt, compact ? styles.excerptCompact : null]}>
         {note.excerpt || "No preview available yet."}
       </Text>
       <View style={styles.row}>
-        <Text style={styles.meta}>{note.syncState.replace("-", " ")}</Text>
+        <Text numberOfLines={1} style={styles.meta}>
+          {compact ? note.format.toUpperCase() : note.syncState.replace("-", " ")}
+        </Text>
         <Text style={styles.meta}>{new Date(note.updatedAt).toLocaleDateString()}</Text>
       </View>
     </Pressable>
@@ -36,6 +49,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     gap: 10,
     padding: 16
+  },
+  cardCompact: {
+    justifyContent: "space-between",
+    minHeight: 174,
+    padding: 14
   },
   cardSelected: {
     borderColor: colors.primaryStrong,
@@ -53,6 +71,11 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     marginRight: 12
   },
+  titleCompact: {
+    fontSize: 15,
+    lineHeight: 20,
+    marginRight: 0
+  },
   badge: {
     color: colors.inkSoft,
     flexShrink: 0,
@@ -63,6 +86,10 @@ const styles = StyleSheet.create({
     color: colors.inkSoft,
     fontSize: 14,
     lineHeight: 20
+  },
+  excerptCompact: {
+    fontSize: 13,
+    lineHeight: 18
   },
   meta: {
     color: colors.inkSoft,
