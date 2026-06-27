@@ -2,7 +2,6 @@
 
 NoteSync, notlari cihazda sifreleyerek saklayan, istenirse hesap ile senkronize eden ve secili notlari guvenli linklerle paylasabilen local-first bir not platformudur.
 
-Bu repo, `project.txt` icindeki NoteSync on raporunu `.NET MAUI` yerine `React Native + Expo` merkezli bir mimariyle hayata geciren monorepo yapisidir.
 
 ## Proje Ozeti
 
