@@ -13,11 +13,12 @@ import type {
 import { canAccessShare } from "@notesync/note-domain";
 import { config } from "./config";
 import { compareSecret, hashSecret } from "./lib/security";
-import { MemoryStore } from "./store/memory-store";
+import { createAppStore } from "./store/create-store";
+import type { AppStore } from "./store/store";
 
 declare module "fastify" {
   interface FastifyInstance {
-    store: MemoryStore;
+    store: AppStore;
     authenticate(request: FastifyRequest, reply: FastifyReply): Promise<void>;
   }
 }
@@ -31,7 +32,7 @@ interface AuthJwtPayload {
 
 export function createApp() {
   const app = fastify({ logger: true });
-  const store = new MemoryStore();
+  const store = createAppStore();
 
   app.decorate("store", store);
 
@@ -63,13 +64,14 @@ export function createApp() {
       data: {
         service: "notesync-api",
         status: "ok",
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        storeProvider: config.storeProvider
       }
     };
   });
 
   app.post<{ Body: RegisterInput }>("/auth/register", async (request, reply) => {
-    const existingUser = store.findUserByEmail(request.body.email);
+    const existingUser = await store.findUserByEmail(request.body.email);
     if (existingUser) {
       return reply.status(409).send({
         ok: false,
@@ -80,7 +82,7 @@ export function createApp() {
       });
     }
 
-    const user = store.createUser({
+    const user = await store.createUser({
       email: request.body.email,
       displayName: request.body.displayName,
       passwordHash: hashSecret(request.body.password)
@@ -97,7 +99,7 @@ export function createApp() {
   });
 
   app.post<{ Body: LoginInput }>("/auth/login", async (request, reply) => {
-    const user = store.findUserByEmail(request.body.email);
+    const user = await store.findUserByEmail(request.body.email);
     if (!user || !compareSecret(request.body.password, user.passwordHash)) {
       return reply.status(401).send({
         ok: false,
@@ -108,7 +110,16 @@ export function createApp() {
       });
     }
 
-    const safeUser = store.getUserById(user.id)!;
+    const safeUser = await store.getUserById(user.id);
+    if (!safeUser) {
+      return reply.status(404).send({
+        ok: false,
+        error: {
+          code: "user-not-found",
+          message: "User record could not be loaded."
+        }
+      });
+    }
     const tokens = await issueTokens(app, safeUser);
     return {
       ok: true,
@@ -126,7 +137,7 @@ export function createApp() {
     },
     async (request) => {
       const user = getAuthUser(request);
-      const notes = store.listNotes(user.id);
+      const notes = await store.listNotes(user.id);
       return {
         ok: true,
         data: notes
@@ -141,7 +152,7 @@ export function createApp() {
     },
     async (request, reply) => {
       const user = getAuthUser(request);
-      const note = store.createNote(user.id, request.body);
+      const note = await store.createNote(user.id, request.body);
       return reply.status(201).send({
         ok: true,
         data: note
@@ -156,7 +167,7 @@ export function createApp() {
     },
     async (request, reply) => {
       const user = getAuthUser(request);
-      const note = store.updateNote(request.params.id, user.id, request.body);
+      const note = await store.updateNote(request.params.id, user.id, request.body);
       if (!note) {
         return reply.status(404).send({
           ok: false,
@@ -181,7 +192,7 @@ export function createApp() {
     },
     async (request, reply) => {
       const user = getAuthUser(request);
-      const note = store.getNote(request.body.noteId, user.id);
+      const note = await store.getNote(request.body.noteId, user.id);
       if (!note) {
         return reply.status(404).send({
           ok: false,
@@ -196,7 +207,7 @@ export function createApp() {
         ? hashSecret(request.body.password)
         : undefined;
 
-      const share = store.createShare(user.id, request.body, passwordHash);
+      const share = await store.createShare(user.id, request.body, passwordHash);
       return reply.status(201).send({
         ok: true,
         data: {
@@ -210,7 +221,7 @@ export function createApp() {
   app.post<{ Params: { slug: string }; Body: { password?: string } }>(
     "/shares/:slug/access",
     async (request, reply) => {
-      const share = store.getShareBySlug(request.params.slug);
+      const share = await store.getShareBySlug(request.params.slug);
       if (!share) {
         return reply.status(404).send({
           ok: false,
@@ -223,7 +234,7 @@ export function createApp() {
 
       const access = canAccessShare(share.policy, share.accessCount);
       if (!access.allowed) {
-        store.createAccessLog(share.id, false);
+        await store.createAccessLog(share.id, false);
         return reply.status(410).send({
           ok: false,
           error: {
@@ -235,7 +246,7 @@ export function createApp() {
 
       if (share.passwordHash) {
         if (!request.body?.password || !compareSecret(request.body.password, share.passwordHash)) {
-          store.createAccessLog(share.id, false);
+          await store.createAccessLog(share.id, false);
           return reply.status(401).send({
             ok: false,
             error: {
@@ -246,8 +257,8 @@ export function createApp() {
         }
       }
 
-      store.incrementShareAccess(share.slug);
-      store.createAccessLog(share.id, true);
+      await store.incrementShareAccess(share.slug);
+      await store.createAccessLog(share.id, true);
 
       return {
         ok: true,

@@ -1,0 +1,82 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String           @id
+  email           String           @unique
+  displayName     String           @map("display_name")
+  passwordHash    String           @map("password_hash")
+  createdAt       DateTime         @default(now()) @map("created_at")
+  notesMetadata   NoteMetadata[]
+  refreshSessions RefreshSession[]
+  createdShares   SharedNote[]     @relation("CreatedShares")
+
+  @@map("users")
+}
+
+model NoteMetadata {
+  id               String       @id
+  ownerId          String       @map("owner_id")
+  title            String
+  format           String
+  status           String
+  syncState        String       @map("sync_state")
+  encryptedContent Json         @map("encrypted_content")
+  createdAt        DateTime     @default(now()) @map("created_at")
+  updatedAt        DateTime     @updatedAt @map("updated_at")
+  owner            User         @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  shares           SharedNote[]
+
+  @@index([ownerId])
+  @@map("notes_metadata")
+}
+
+model SharedNote {
+  id               String           @id
+  noteId           String           @map("note_id")
+  slug             String           @unique
+  createdBy        String           @map("created_by")
+  encryptedContent Json             @map("encrypted_content")
+  title            String
+  format           String
+  policy           Json
+  passwordHash     String?          @map("password_hash")
+  accessCount      Int              @default(0) @map("access_count")
+  createdAt        DateTime         @default(now()) @map("created_at")
+  note             NoteMetadata     @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  creator          User             @relation("CreatedShares", fields: [createdBy], references: [id], onDelete: Cascade)
+  accessLogs       ShareAccessLog[]
+
+  @@index([noteId])
+  @@map("shared_notes")
+}
+
+model ShareAccessLog {
+  id         String     @id
+  shareId    String     @map("share_id")
+  accessedAt DateTime   @default(now()) @map("accessed_at")
+  success    Boolean
+  share      SharedNote @relation(fields: [shareId], references: [id], onDelete: Cascade)
+
+  @@index([shareId])
+  @@map("share_access_logs")
+}
+
+model RefreshSession {
+  id           String   @id
+  userId       String   @map("user_id")
+  refreshToken String   @map("refresh_token")
+  createdAt    DateTime @default(now()) @map("created_at")
+  expiresAt    DateTime @map("expires_at")
+  revokedAt    DateTime? @map("revoked_at")
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_sessions")
+}

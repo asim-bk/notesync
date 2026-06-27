@@ -23,9 +23,33 @@ export default function App() {
   const isMobile = !isTablet;
 
   const noteCount = app.summaries.length;
-  const protectedCount = app.summaries.filter((note) => note.encrypted).length;
+  const protectedCount = app.encryptedNoteCount;
   const syncedCount = app.summaries.filter((note) => note.syncState === "synced").length;
   const activeSummary = app.summaries.find((note) => note.id === app.activeStoredNote?.note.id) ?? null;
+
+  if (!app.ready) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.loadingScreen}>
+          <Text style={styles.brandTitle}>NoteSync</Text>
+          <Text style={styles.loadingText}>
+            Preparing encrypted local storage and device keychain access.
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (app.error) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.loadingScreen}>
+          <Text style={styles.brandTitle}>NoteSync</Text>
+          <Text style={styles.errorText}>Startup failed: {app.error}</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -149,14 +173,14 @@ function renderSidebar(app: ReturnType<typeof useNotesApp>, noteCount: number) {
 
       <ScrollView contentContainerStyle={styles.noteList}>
         {app.summaries.map((note) => (
-          <NoteCard
-            key={note.id}
-            note={note}
-            selected={note.id === app.activeStoredNote?.note.id}
-            onPress={() => app.editNote(note.id)}
-          />
-        ))}
-      </ScrollView>
+        <NoteCard
+          key={note.id}
+          note={note}
+          selected={note.id === app.activeStoredNote?.note.id}
+          onPress={() => void app.editNote(note.id)}
+        />
+      ))}
+    </ScrollView>
     </>
   );
 }
@@ -357,6 +381,29 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
     paddingHorizontal: 16,
     paddingTop: 14
+  },
+  loadingScreen: {
+    alignItems: "center",
+    backgroundColor: colors.bg,
+    flex: 1,
+    justifyContent: "center",
+    paddingHorizontal: 24
+  },
+  loadingText: {
+    color: colors.textMuted,
+    fontSize: 15,
+    lineHeight: 22,
+    marginTop: 10,
+    maxWidth: 320,
+    textAlign: "center"
+  },
+  errorText: {
+    color: colors.warning,
+    fontSize: 15,
+    lineHeight: 22,
+    marginTop: 10,
+    maxWidth: 340,
+    textAlign: "center"
   },
   topBar: {
     gap: 14,

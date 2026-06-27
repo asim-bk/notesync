@@ -8,18 +8,16 @@ import type {
   UserProfile
 } from "@notesync/shared-types";
 import { createId, createSlug } from "../lib/id";
+import type { AppStore, ShareLookupRecord, StoredUser } from "./store";
 
-interface StoredUser extends UserProfile {
-  passwordHash: string;
-}
-
-export class MemoryStore {
+export class MemoryStore implements AppStore {
+  readonly provider = "memory" as const;
   private readonly users = new Map<string, StoredUser>();
   private readonly notes = new Map<string, NoteRecord>();
-  private readonly shares = new Map<string, ShareRecord & { passwordHash?: string }>();
+  private readonly shares = new Map<string, ShareLookupRecord>();
   private readonly accessLogs: AccessLogRecord[] = [];
 
-  createUser(input: Omit<StoredUser, "id" | "createdAt">): UserProfile {
+  async createUser(input: Omit<StoredUser, "id" | "createdAt">): Promise<UserProfile> {
     const user: StoredUser = {
       id: createId(),
       createdAt: new Date().toISOString(),
@@ -29,16 +27,16 @@ export class MemoryStore {
     return sanitizeUser(user);
   }
 
-  findUserByEmail(email: string): StoredUser | undefined {
+  async findUserByEmail(email: string): Promise<StoredUser | undefined> {
     return [...this.users.values()].find((user) => user.email === email);
   }
 
-  getUserById(userId: string): UserProfile | undefined {
+  async getUserById(userId: string): Promise<UserProfile | undefined> {
     const user = this.users.get(userId);
     return user ? sanitizeUser(user) : undefined;
   }
 
-  createNote(ownerId: string, input: CreateNoteInput): NoteRecord {
+  async createNote(ownerId: string, input: CreateNoteInput): Promise<NoteRecord> {
     const note: NoteRecord = {
       id: createId(),
       ownerId,
@@ -55,7 +53,11 @@ export class MemoryStore {
     return note;
   }
 
-  updateNote(noteId: string, ownerId: string, input: UpdateNoteInput): NoteRecord | undefined {
+  async updateNote(
+    noteId: string,
+    ownerId: string,
+    input: UpdateNoteInput
+  ): Promise<NoteRecord | undefined> {
     const note = this.notes.get(noteId);
     if (!note || note.ownerId !== ownerId) {
       return undefined;
@@ -71,11 +73,11 @@ export class MemoryStore {
     return updated;
   }
 
-  listNotes(ownerId: string): NoteRecord[] {
+  async listNotes(ownerId: string): Promise<NoteRecord[]> {
     return [...this.notes.values()].filter((note) => note.ownerId === ownerId);
   }
 
-  getNote(noteId: string, ownerId: string): NoteRecord | undefined {
+  async getNote(noteId: string, ownerId: string): Promise<NoteRecord | undefined> {
     const note = this.notes.get(noteId);
     if (!note || note.ownerId !== ownerId) {
       return undefined;
@@ -87,8 +89,8 @@ export class MemoryStore {
     ownerId: string,
     input: CreateShareInput,
     passwordHash?: string
-  ): ShareRecord {
-    const share: ShareRecord & { passwordHash?: string } = {
+  ): Promise<ShareRecord> {
+    const share: ShareLookupRecord = {
       id: createId(),
       noteId: input.noteId,
       slug: createSlug(),
@@ -107,14 +109,14 @@ export class MemoryStore {
     };
 
     this.shares.set(share.slug, share);
-    return sanitizeShare(share);
+    return Promise.resolve(sanitizeShare(share));
   }
 
-  getShareBySlug(slug: string): (ShareRecord & { passwordHash?: string }) | undefined {
+  async getShareBySlug(slug: string): Promise<ShareLookupRecord | undefined> {
     return this.shares.get(slug);
   }
 
-  incrementShareAccess(slug: string): ShareRecord | undefined {
+  async incrementShareAccess(slug: string): Promise<ShareRecord | undefined> {
     const share = this.shares.get(slug);
     if (!share) {
       return undefined;
@@ -124,7 +126,7 @@ export class MemoryStore {
     return sanitizeShare(share);
   }
 
-  createAccessLog(shareId: string, success: boolean): AccessLogRecord {
+  async createAccessLog(shareId: string, success: boolean): Promise<AccessLogRecord> {
     const log: AccessLogRecord = {
       id: createId(),
       shareId,
@@ -142,7 +144,7 @@ function sanitizeUser(user: StoredUser): UserProfile {
 }
 
 function sanitizeShare(
-  share: ShareRecord & { passwordHash?: string }
+  share: ShareLookupRecord
 ): ShareRecord {
   const { passwordHash: _passwordHash, ...safeShare } = share;
   return safeShare;

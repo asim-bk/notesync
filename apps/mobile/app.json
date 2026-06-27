@@ -4,6 +4,10 @@
     "slug": "notesync",
     "version": "0.1.0",
     "orientation": "portrait",
-    "userInterfaceStyle": "dark"
+    "userInterfaceStyle": "dark",
+    "plugins": [
+      "expo-sqlite",
+      "expo-secure-store"
+    ]
   }
 }
