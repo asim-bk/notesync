@@ -10,7 +10,11 @@
     "dev:api": "npm --workspace @notesync/api run dev",
     "dev:mobile": "npm --workspace @notesync/mobile run start",
     "dev:web": "npm --workspace @notesync/mobile run web",
-    "build": "npm --workspace @notesync/shared-types run build && npm --workspace @notesync/note-domain run build && npm --workspace @notesync/crypto-core run build && npm --workspace @notesync/api run build && npm --workspace @notesync/mobile run build"
+    "build": "npm --workspace @notesync/shared-types run build && npm --workspace @notesync/note-domain run build && npm --workspace @notesync/crypto-core run build && npm --workspace @notesync/api run build && npm --workspace @notesync/mobile run build",
+    "test": "npm run test:domain && npm run test:api && npm run test:mobile",
+    "test:api": "tsx --test apps/api/src/app.test.ts",
+    "test:domain": "tsx --test packages/note-domain/src/index.test.ts",
+    "test:mobile": "tsx --test apps/mobile/src/data/local-note-web-state.test.ts"
   },
   "dependencies": {
     "@expo/metro-runtime": "~5.0.5",
@@ -19,6 +23,7 @@
     "react-native-web": "^0.20.0"
   },
   "devDependencies": {
-    "@types/react": "~19.0.10"
+    "@types/react": "~19.0.10",
+    "tsx": "^4.20.6"
   }
 }

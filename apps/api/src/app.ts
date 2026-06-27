@@ -7,12 +7,22 @@ import type {
   CreateNoteInput,
   CreateShareInput,
   LoginInput,
+  RefreshTokenInput,
   RegisterInput,
   UpdateNoteInput
 } from "@notesync/shared-types";
 import { canAccessShare } from "@notesync/note-domain";
 import { config } from "./config";
-import { compareSecret, hashSecret } from "./lib/security";
+import { createId } from "./lib/id";
+import { FixedWindowRateLimiter } from "./lib/rate-limit";
+import {
+  compareSecret,
+  hashOpaqueToken,
+  hashSecret,
+  isValidEmail,
+  isValidPassword,
+  normalizeEmail
+} from "./lib/security";
 import { createAppStore } from "./store/create-store";
 import type { AppStore } from "./store/store";
 
@@ -28,7 +38,20 @@ interface AuthJwtPayload {
   email: string;
   displayName: string;
   createdAt: string;
+  type: "access";
 }
+
+interface RefreshJwtPayload {
+  sub: string;
+  sessionId: string;
+  type: "refresh";
+  iat?: number;
+  exp?: number;
+}
+
+const registerAttemptLimiter = new FixedWindowRateLimiter(10, 60_000);
+const loginFailureLimiter = new FixedWindowRateLimiter(5, 10 * 60_000);
+const shareAccessFailureLimiter = new FixedWindowRateLimiter(10, 10 * 60_000);
 
 export function createApp() {
   const app = fastify({ logger: true });
@@ -48,7 +71,7 @@ export function createApp() {
     try {
       await request.jwtVerify();
     } catch {
-      reply.status(401).send({
+      return reply.status(401).send({
         ok: false,
         error: {
           code: "unauthorized",
@@ -59,6 +82,7 @@ export function createApp() {
   });
 
   app.get("/health", async () => {
+    await store.healthcheck();
     return {
       ok: true,
       data: {
@@ -71,7 +95,34 @@ export function createApp() {
   });
 
   app.post<{ Body: RegisterInput }>("/auth/register", async (request, reply) => {
-    const existingUser = await store.findUserByEmail(request.body.email);
+    const registerKey = `register:${request.ip}`;
+    const registerWindow = registerAttemptLimiter.consume(registerKey);
+    if (!registerWindow.allowed) {
+      return sendRateLimitError(reply, "too-many-register-attempts", registerWindow.retryAfterSeconds);
+    }
+
+    const email = normalizeEmail(request.body.email);
+    if (!isValidEmail(email)) {
+      return reply.status(400).send({
+        ok: false,
+        error: {
+          code: "invalid-email",
+          message: "A valid email address is required."
+        }
+      });
+    }
+
+    if (!isValidPassword(request.body.password)) {
+      return reply.status(400).send({
+        ok: false,
+        error: {
+          code: "weak-password",
+          message: "Password must be at least 8 characters long."
+        }
+      });
+    }
+
+    const existingUser = await store.findUserByEmail(email);
     if (existingUser) {
       return reply.status(409).send({
         ok: false,
@@ -83,12 +134,12 @@ export function createApp() {
     }
 
     const user = await store.createUser({
-      email: request.body.email,
-      displayName: request.body.displayName,
+      email,
+      displayName: request.body.displayName.trim() || "NoteSync User",
       passwordHash: hashSecret(request.body.password)
     });
 
-    const tokens = await issueTokens(app, user);
+    const tokens = await issueTokens(app, store, user);
     return reply.status(201).send({
       ok: true,
       data: {
@@ -99,8 +150,17 @@ export function createApp() {
   });
 
   app.post<{ Body: LoginInput }>("/auth/login", async (request, reply) => {
-    const user = await store.findUserByEmail(request.body.email);
+    const email = normalizeEmail(request.body.email);
+    const loginKey = buildAuthRateLimitKey(request.ip, email);
+    const loginWindow = loginFailureLimiter.check(loginKey);
+
+    if (!loginWindow.allowed) {
+      return sendRateLimitError(reply, "too-many-login-attempts", loginWindow.retryAfterSeconds);
+    }
+
+    const user = await store.findUserByEmail(email);
     if (!user || !compareSecret(request.body.password, user.passwordHash)) {
+      loginFailureLimiter.consume(loginKey);
       return reply.status(401).send({
         ok: false,
         error: {
@@ -109,6 +169,8 @@ export function createApp() {
         }
       });
     }
+
+    loginFailureLimiter.reset(loginKey);
 
     const safeUser = await store.getUserById(user.id);
     if (!safeUser) {
@@ -120,7 +182,8 @@ export function createApp() {
         }
       });
     }
-    const tokens = await issueTokens(app, safeUser);
+
+    const tokens = await issueTokens(app, store, safeUser);
     return {
       ok: true,
       data: {
@@ -128,6 +191,96 @@ export function createApp() {
         tokens
       }
     };
+  });
+
+  app.get(
+    "/auth/me",
+    {
+      preHandler: [app.authenticate]
+    },
+    async (request, reply) => {
+      const authUser = getAuthUser(request);
+      const user = await store.getUserById(authUser.id);
+      if (!user) {
+        return reply.status(404).send({
+          ok: false,
+          error: {
+            code: "user-not-found",
+            message: "User record could not be loaded."
+          }
+        });
+      }
+
+      return {
+        ok: true,
+        data: user
+      };
+    }
+  );
+
+  app.post<{ Body: RefreshTokenInput }>("/auth/refresh", async (request, reply) => {
+    const payload = await verifyRefreshToken(app, request.body.refreshToken);
+    if (!payload) {
+      return reply.status(401).send({
+        ok: false,
+        error: {
+          code: "invalid-refresh-token",
+          message: "A valid refresh token is required."
+        }
+      });
+    }
+
+    const session = await store.getRefreshSession(payload.sessionId);
+    if (
+      !session ||
+      session.userId !== payload.sub ||
+      session.revokedAt ||
+      new Date(session.expiresAt).getTime() <= Date.now() ||
+      !compareOpaqueToken(request.body.refreshToken, session.refreshTokenHash)
+    ) {
+      if (session && !session.revokedAt) {
+        await store.revokeRefreshSession(session.id);
+      }
+
+      return reply.status(401).send({
+        ok: false,
+        error: {
+          code: "refresh-session-invalid",
+          message: "Refresh session is invalid or expired."
+        }
+      });
+    }
+
+    await store.revokeRefreshSession(session.id);
+
+    const user = await store.getUserById(payload.sub);
+    if (!user) {
+      return reply.status(404).send({
+        ok: false,
+        error: {
+          code: "user-not-found",
+          message: "User record could not be loaded."
+        }
+      });
+    }
+
+    const tokens = await issueTokens(app, store, user);
+    return {
+      ok: true,
+      data: {
+        user,
+        tokens
+      }
+    };
+  });
+
+  app.post<{ Body: RefreshTokenInput }>("/auth/logout", async (request, reply) => {
+    const payload = await verifyRefreshToken(app, request.body.refreshToken);
+    if (payload) {
+      await store.revokeRefreshSession(payload.sessionId);
+    }
+
+    return reply.status(204).send();
   });
 
   app.get(
@@ -185,6 +338,28 @@ export function createApp() {
     }
   );
 
+  app.delete<{ Params: { id: string } }>(
+    "/notes/:id",
+    {
+      preHandler: [app.authenticate]
+    },
+    async (request, reply) => {
+      const user = getAuthUser(request);
+      const deleted = await store.deleteNote(request.params.id, user.id);
+      if (!deleted) {
+        return reply.status(404).send({
+          ok: false,
+          error: {
+            code: "note-not-found",
+            message: "Requested note was not found."
+          }
+        });
+      }
+
+      return reply.status(204).send();
+    }
+  );
+
   app.post<{ Body: CreateShareInput }>(
     "/shares",
     {
@@ -232,6 +407,12 @@ export function createApp() {
         });
       }
 
+      const shareKey = `share:${request.ip}:${request.params.slug}`;
+      const shareWindow = shareAccessFailureLimiter.check(shareKey);
+      if (!shareWindow.allowed) {
+        return sendRateLimitError(reply, "too-many-share-attempts", shareWindow.retryAfterSeconds);
+      }
+
       const access = canAccessShare(share.policy, share.accessCount);
       if (!access.allowed) {
         await store.createAccessLog(share.id, false);
@@ -246,6 +427,7 @@ export function createApp() {
 
       if (share.passwordHash) {
         if (!request.body?.password || !compareSecret(request.body.password, share.passwordHash)) {
+          shareAccessFailureLimiter.consume(shareKey);
           await store.createAccessLog(share.id, false);
           return reply.status(401).send({
             ok: false,
@@ -257,6 +439,7 @@ export function createApp() {
         }
       }
 
+      shareAccessFailureLimiter.reset(shareKey);
       await store.incrementShareAccess(share.slug);
       await store.createAccessLog(share.id, true);
 
@@ -280,19 +463,81 @@ export function createApp() {
 
 async function issueTokens(
   app: FastifyInstance,
+  store: AppStore,
   user: { id: string; email: string; displayName: string; createdAt: string }
 ) {
-  const accessToken = await app.jwt.sign(user, { expiresIn: "15m" });
-  const refreshToken = await app.jwt.sign(
-    { sub: user.id, type: "refresh" },
-    { expiresIn: "7d" }
+  const accessToken = await app.jwt.sign(
+    {
+      id: user.id,
+      email: user.email,
+      displayName: user.displayName,
+      createdAt: user.createdAt,
+      type: "access"
+    },
+    { expiresIn: config.accessTokenTtlSeconds }
   );
+
+  const sessionId = createId();
+  const refreshToken = await app.jwt.sign(
+    { sub: user.id, sessionId, type: "refresh" },
+    { expiresIn: config.refreshTokenTtlSeconds }
+  );
+
+  await store.createRefreshSession({
+    id: sessionId,
+    userId: user.id,
+    refreshTokenHash: hashOpaqueToken(refreshToken),
+    expiresAt: new Date(Date.now() + config.refreshTokenTtlSeconds * 1000).toISOString()
+  });
 
   return {
     accessToken,
     refreshToken,
-    expiresInSeconds: 900
+    expiresInSeconds: config.accessTokenTtlSeconds
   };
+}
+
+async function verifyRefreshToken(
+  app: FastifyInstance,
+  refreshToken?: string
+): Promise<RefreshJwtPayload | null> {
+  if (!refreshToken) {
+    return null;
+  }
+
+  try {
+    const payload = await app.jwt.verify<RefreshJwtPayload>(refreshToken);
+    if (payload.type !== "refresh" || !payload.sub || !payload.sessionId) {
+      return null;
+    }
+
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+function compareOpaqueToken(token: string, tokenHash: string): boolean {
+  return hashOpaqueToken(token) === tokenHash;
+}
+
+function buildAuthRateLimitKey(ip: string, email: string): string {
+  return `auth:${ip}:${email}`;
+}
+
+function sendRateLimitError(
+  reply: FastifyReply,
+  code: string,
+  retryAfterSeconds: number
+) {
+  reply.header("Retry-After", `${retryAfterSeconds}`);
+  return reply.status(429).send({
+    ok: false,
+    error: {
+      code,
+      message: "Too many attempts. Please try again later."
+    }
+  });
 }
 
 function getAuthUser(request: FastifyRequest): AuthJwtPayload {

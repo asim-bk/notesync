@@ -8,14 +8,24 @@ import type {
   UserProfile
 } from "@notesync/shared-types";
 import { createId, createSlug } from "../lib/id";
-import type { AppStore, ShareLookupRecord, StoredUser } from "./store";
+import type {
+  AppStore,
+  RefreshSessionRecord,
+  ShareLookupRecord,
+  StoredUser
+} from "./store";
 
 export class MemoryStore implements AppStore {
   readonly provider = "memory" as const;
   private readonly users = new Map<string, StoredUser>();
+  private readonly refreshSessions = new Map<string, RefreshSessionRecord>();
   private readonly notes = new Map<string, NoteRecord>();
   private readonly shares = new Map<string, ShareLookupRecord>();
   private readonly accessLogs: AccessLogRecord[] = [];
+
+  async healthcheck(): Promise<void> {
+    return Promise.resolve();
+  }
 
   async createUser(input: Omit<StoredUser, "id" | "createdAt">): Promise<UserProfile> {
     const user: StoredUser = {
@@ -36,17 +46,51 @@ export class MemoryStore implements AppStore {
     return user ? sanitizeUser(user) : undefined;
   }
 
+  async createRefreshSession(input: {
+    id: string;
+    userId: string;
+    refreshTokenHash: string;
+    expiresAt: string;
+  }): Promise<RefreshSessionRecord> {
+    const session: RefreshSessionRecord = {
+      id: input.id,
+      userId: input.userId,
+      refreshTokenHash: input.refreshTokenHash,
+      createdAt: new Date().toISOString(),
+      expiresAt: input.expiresAt
+    };
+    this.refreshSessions.set(session.id, session);
+    return session;
+  }
+
+  async getRefreshSession(sessionId: string): Promise<RefreshSessionRecord | undefined> {
+    return this.refreshSessions.get(sessionId);
+  }
+
+  async revokeRefreshSession(sessionId: string): Promise<void> {
+    const session = this.refreshSessions.get(sessionId);
+    if (!session || session.revokedAt) {
+      return;
+    }
+
+    this.refreshSessions.set(sessionId, {
+      ...session,
+      revokedAt: new Date().toISOString()
+    });
+  }
+
   async createNote(ownerId: string, input: CreateNoteInput): Promise<NoteRecord> {
     const note: NoteRecord = {
-      id: createId(),
+      id: input.id ?? createId(),
       ownerId,
       title: input.title,
       format: input.format,
       encryptedContent: input.encryptedContent,
       status: "active",
       createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      syncState: "local-only"
+      updatedAt: input.updatedAt ?? new Date().toISOString(),
+      syncState: input.syncEnabled ? "synced" : "local-only",
+      syncEnabled: Boolean(input.syncEnabled)
     };
 
     this.notes.set(note.id, note);
@@ -66,11 +110,22 @@ export class MemoryStore implements AppStore {
     const updated: NoteRecord = {
       ...note,
       ...input,
-      updatedAt: new Date().toISOString(),
-      syncState: "pending-sync"
+      updatedAt: input.updatedAt ?? new Date().toISOString(),
+      syncState: input.syncEnabled ? "synced" : "pending-sync",
+      syncEnabled: input.syncEnabled ?? note.syncEnabled
     };
     this.notes.set(noteId, updated);
     return updated;
+  }
+
+  async deleteNote(noteId: string, ownerId: string): Promise<boolean> {
+    const note = this.notes.get(noteId);
+    if (!note || note.ownerId !== ownerId) {
+      return false;
+    }
+
+    this.notes.delete(noteId);
+    return true;
   }
 
   async listNotes(ownerId: string): Promise<NoteRecord[]> {

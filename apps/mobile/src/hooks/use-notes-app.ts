@@ -1,15 +1,39 @@
 import { useEffect, useMemo, useState } from "react";
 import type {
-  CreateShareInput,
+  LoginInput,
   NoteDraft,
   NoteFormat,
   NoteRecord,
   NoteSummary,
-  ShareRecord
+  RegisterInput,
+  ShareCreationResult
 } from "@notesync/shared-types";
+import { convertNoteContent } from "@notesync/note-domain";
 import { LocalNoteRepository } from "../data/local-note-repository";
-import { getOrCreateDeviceSecret } from "../lib/device-key";
+import {
+  accessRemoteShare,
+  ApiClientError,
+  createRemoteNote,
+  createRemoteShare,
+  deleteRemoteNote,
+  fetchCurrentUser,
+  listRemoteNotes,
+  login,
+  logout,
+  refreshAuthSession,
+  register,
+  updateRemoteNote
+} from "../lib/api-client";
+import {
+  clearStoredAuthState,
+  readStoredAuthState,
+  type StoredAuthState,
+  writeStoredAuthState
+} from "../lib/auth-storage";
+import { getOrCreateDeviceSecret, rotateStoredDeviceSecret } from "../lib/device-key";
+import { exportNoteDocument, type ExportTarget } from "../lib/exporters";
 import { createEmptyDraft } from "../lib/note-utils";
+import { deriveSyncSecret } from "../lib/sync-secret";
 import { decryptNoteContent, encryptNoteContent } from "../lib/web-crypto";
 
 const repository = new LocalNoteRepository();
@@ -17,24 +41,51 @@ const OWNER_ID = "demo-user";
 let seeded = false;
 
 export type ScreenState = "list" | "editor" | "share";
+export type AuthMode = "register" | "login";
 
 interface ActiveStoredNote {
   note: NoteRecord;
   decryptedContent: string;
 }
 
+interface AccessedShareState {
+  slug: string;
+  title: string;
+  format: NoteFormat;
+  createdAt: string;
+  content: string;
+}
+
+interface AuthFormState {
+  email: string;
+  password: string;
+  displayName: string;
+}
+
 export function useNotesApp() {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [screen, setScreen] = useState<ScreenState>("list");
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
   const [activeStoredNote, setActiveStoredNote] = useState<ActiveStoredNote | undefined>();
   const [draft, setDraft] = useState<NoteDraft>(createEmptyDraft());
-  const [sharePreview, setSharePreview] = useState<ShareRecord | null>(null);
+  const [syncEnabled, setSyncEnabled] = useState(false);
+  const [sharePreview, setSharePreview] = useState<ShareCreationResult | null>(null);
   const [sharePassword, setSharePassword] = useState("");
+  const [shareSlug, setShareSlug] = useState("");
+  const [shareAccessPassword, setShareAccessPassword] = useState("");
+  const [accessedShare, setAccessedShare] = useState<AccessedShareState | null>(null);
   const [loading, setLoading] = useState(false);
   const [deviceSecret, setDeviceSecret] = useState<string | null>(null);
   const [summaries, setSummaries] = useState<NoteSummary[]>([]);
+  const [authMode, setAuthMode] = useState<AuthMode>("register");
+  const [authForm, setAuthForm] = useState<AuthFormState>({
+    email: "demo@notesync.local",
+    password: "DemoPass123!",
+    displayName: "Demo User"
+  });
+  const [authState, setAuthState] = useState<StoredAuthState | null>(null);
 
   useEffect(() => {
     void bootstrap();
@@ -44,18 +95,26 @@ export function useNotesApp() {
     return summaries.filter((summary) => summary.encrypted).length;
   }, [summaries]);
 
+  const syncedNoteCount = useMemo(() => {
+    return summaries.filter((summary) => summary.syncState === "synced").length;
+  }, [summaries]);
+
   function startNewNote(format: NoteFormat = "markdown") {
     setActiveNoteId(null);
     setActiveStoredNote(undefined);
     setDraft(createEmptyDraft(format));
+    setSyncEnabled(Boolean(authState));
     setSharePreview(null);
     setSharePassword("");
+    setStatusMessage(null);
     setScreen("editor");
   }
 
   async function editNote(noteId: string) {
     await openNote(noteId);
     setSharePreview(null);
+    setAccessedShare(null);
+    setStatusMessage(null);
   }
 
   async function saveNote() {
@@ -64,99 +123,394 @@ export function useNotesApp() {
     }
 
     setLoading(true);
+    setStatusMessage(null);
     try {
       const encrypted = await encryptNoteContent(draft.content, deviceSecret);
       let savedNote: NoteRecord | undefined;
 
       if (activeNoteId) {
-        savedNote = await repository.updateDraft(activeNoteId, draft, encrypted);
+        savedNote = await repository.updateDraft(activeNoteId, draft, encrypted, { syncEnabled });
       } else {
-        savedNote = await repository.saveDraft(OWNER_ID, draft, encrypted);
+        savedNote = await repository.saveDraft(OWNER_ID, draft, encrypted, { syncEnabled });
       }
 
-      await refreshSummaries();
-
-      if (savedNote) {
-        setActiveNoteId(savedNote.id);
-        setActiveStoredNote({
-          note: savedNote,
-          decryptedContent: draft.content
-        });
+      if (!savedNote) {
+        return;
       }
+
+      if (savedNote.syncEnabled && authState) {
+        const nextAuthState = await ensureFreshAuthState();
+        if (nextAuthState) {
+          await pushNoteToRemote(savedNote, draft.content, nextAuthState);
+          await repository.markNoteSynced(savedNote.id);
+          savedNote = {
+            ...savedNote,
+            syncState: "synced"
+          };
+        }
+      }
+
+      await refreshSummaries(deviceSecret);
+
+      setActiveNoteId(savedNote.id);
+      setActiveStoredNote({
+        note: savedNote,
+        decryptedContent: draft.content
+      });
 
       setSharePreview(null);
       setScreen("editor");
+      setStatusMessage(savedNote.syncEnabled ? "Note saved and synced." : "Encrypted note saved locally.");
+    } catch (cause) {
+      setStatusMessage(getErrorMessage(cause));
     } finally {
       setLoading(false);
     }
   }
 
   async function createShare() {
-    if (!activeNoteId) {
+    if (!activeStoredNote) {
+      setStatusMessage("Open a note before creating a share.");
       return;
     }
 
-    const stored = activeStoredNote;
-    if (!stored) {
+    if (!sharePassword.trim()) {
+      setStatusMessage("A share password is required for secure remote sharing.");
       return;
     }
 
-    const share: ShareRecord = {
-      id: `share-${stored.note.id}`,
-      noteId: stored.note.id,
-      slug: stored.note.id.slice(-8),
-      createdBy: stored.note.ownerId,
-      encryptedContent: stored.note.encryptedContent,
-      title: stored.note.title,
-      format: stored.note.format,
-      policy: {
-        passwordProtected: Boolean(sharePassword),
-        expiresAt: undefined,
+    const nextAuthState = await ensureFreshAuthState();
+    if (!nextAuthState) {
+      setStatusMessage("Sign in before creating a live share.");
+      return;
+    }
+
+    setLoading(true);
+    setStatusMessage(null);
+
+    try {
+      const shareSourceNote: NoteRecord = {
+        ...activeStoredNote.note,
+        title: draft.title.trim() || activeStoredNote.note.title,
+        format: draft.format,
+        updatedAt: new Date().toISOString()
+      };
+
+      await pushNoteToRemote(shareSourceNote, draft.content, nextAuthState);
+      const shareEncryptedContent = await encryptNoteContent(
+        draft.content,
+        sharePassword
+      );
+
+      const share = await createRemoteShare(nextAuthState.session.tokens.accessToken, {
+        noteId: shareSourceNote.id,
+        title: shareSourceNote.title,
+        format: shareSourceNote.format,
+        encryptedContent: shareEncryptedContent,
+        password: sharePassword,
         maxViews: 25
-      },
-      createdAt: new Date().toISOString(),
-      accessCount: 0
-    };
+      });
 
-    const _sharePayload: CreateShareInput = {
-      noteId: stored.note.id,
-      title: stored.note.title,
-      format: stored.note.format,
-      encryptedContent: stored.note.encryptedContent,
-      password: sharePassword || undefined,
-      maxViews: 25
-    };
+      await repository.recordShareHistory(activeStoredNote.note.id, share);
+      setSharePreview(share);
+      setShareSlug(share.slug);
+      setScreen("share");
+      setStatusMessage("Secure share created.");
+    } catch (cause) {
+      setStatusMessage(getErrorMessage(cause));
+    } finally {
+      setLoading(false);
+    }
+  }
 
-    await repository.recordShareHistory(stored.note.id, share);
-    setSharePreview(share);
-    setScreen("share");
+  async function accessSharedNote() {
+    if (!shareSlug.trim() || !shareAccessPassword.trim()) {
+      setStatusMessage("Share slug and password are required.");
+      return;
+    }
+
+    setLoading(true);
+    setStatusMessage(null);
+
+    try {
+      const response = await accessRemoteShare(shareSlug.trim(), shareAccessPassword);
+      const content = await decryptNoteContent(response.encryptedContent, shareAccessPassword);
+      setAccessedShare({
+        slug: response.share.slug,
+        title: response.share.title,
+        format: response.share.format,
+        createdAt: response.share.createdAt,
+        content
+      });
+      setScreen("share");
+      setStatusMessage("Shared note opened.");
+    } catch (cause) {
+      setAccessedShare(null);
+      setStatusMessage(getErrorMessage(cause));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function syncNow() {
+    if (!deviceSecret) {
+      return;
+    }
+
+    const nextAuthState = await ensureFreshAuthState();
+    if (!nextAuthState) {
+      setStatusMessage("Sign in before running sync.");
+      return;
+    }
+
+    setLoading(true);
+    setStatusMessage(null);
+
+    try {
+      const queue = await repository.listPendingSyncQueue();
+      for (const item of queue) {
+        if (item.entityType !== "note") {
+          await repository.dequeueSyncItem(item.id);
+          continue;
+        }
+
+        if (item.operation === "delete-note") {
+          try {
+            await deleteRemoteNote(nextAuthState.session.tokens.accessToken, item.entityId);
+          } catch (cause) {
+            if (!(cause instanceof ApiClientError) || cause.status !== 404) {
+              throw cause;
+            }
+          }
+          await repository.dequeueSyncItem(item.id);
+          continue;
+        }
+
+        const localNote = await repository.getById(item.entityId);
+        if (!localNote) {
+          await repository.dequeueSyncItem(item.id);
+          continue;
+        }
+
+        const localContent = await decryptNoteContent(localNote.encryptedContent, deviceSecret);
+        await pushNoteToRemote(localNote, localContent, nextAuthState);
+        await repository.markNoteSynced(localNote.id);
+        await repository.dequeueSyncItem(item.id);
+      }
+
+      const remoteNotes = await listRemoteNotes(nextAuthState.session.tokens.accessToken);
+      let conflictCount = 0;
+
+      for (const remoteNote of remoteNotes) {
+        const localNote = await repository.getById(remoteNote.id);
+        if (
+          localNote &&
+          localNote.syncState === "pending-sync" &&
+          new Date(remoteNote.updatedAt).getTime() > new Date(localNote.updatedAt).getTime()
+        ) {
+          conflictCount += 1;
+          continue;
+        }
+
+        const content = await decryptNoteContent(remoteNote.encryptedContent, nextAuthState.syncSecret);
+        const localEncryptedContent = await encryptNoteContent(content, deviceSecret);
+        await repository.upsertNoteRecord({
+          ...remoteNote,
+          encryptedContent: localEncryptedContent,
+          syncEnabled: true,
+          syncState: "synced"
+        });
+      }
+
+      await refreshSummaries(deviceSecret);
+      if (activeNoteId) {
+        await openNote(activeNoteId, deviceSecret);
+      }
+
+      setStatusMessage(
+        conflictCount > 0
+          ? `Sync finished with ${conflictCount} deferred conflict(s).`
+          : "Sync completed successfully."
+      );
+    } catch (cause) {
+      setStatusMessage(getErrorMessage(cause));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function exportActiveNote(target: ExportTarget) {
+    const content = activeStoredNote?.decryptedContent ?? draft.content;
+    const title = draft.title || activeStoredNote?.note.title || "NoteSync note";
+    if (!content.trim()) {
+      setStatusMessage("There is no note content to export.");
+      return;
+    }
+
+    setLoading(true);
+    setStatusMessage(null);
+    try {
+      const filename = await exportNoteDocument(
+        {
+          title,
+          content,
+          format: draft.format
+        },
+        target
+      );
+      setStatusMessage(`${filename} exported.`);
+    } catch (cause) {
+      setStatusMessage(getErrorMessage(cause));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function rotateDeviceKey() {
+    if (!deviceSecret) {
+      return;
+    }
+
+    setLoading(true);
+    setStatusMessage(null);
+
+    try {
+      const notes = await repository.listAllNotes();
+      const nextSecret = await rotateStoredDeviceSecret();
+
+      for (const note of notes) {
+        const content = await decryptNoteContent(note.encryptedContent, deviceSecret);
+        const reencryptedContent = await encryptNoteContent(content, nextSecret);
+        await repository.upsertNoteRecord({
+          ...note,
+          encryptedContent: reencryptedContent
+        });
+      }
+
+      setDeviceSecret(nextSecret);
+      await refreshSummaries(nextSecret);
+      if (activeNoteId) {
+        await openNote(activeNoteId, nextSecret);
+      }
+      setStatusMessage("Device encryption key rotated successfully.");
+    } catch (cause) {
+      setStatusMessage(getErrorMessage(cause));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function submitAuth() {
+    setLoading(true);
+    setStatusMessage(null);
+
+    try {
+      const email = authForm.email.trim().toLowerCase();
+      const password = authForm.password;
+      const syncSecret = await deriveSyncSecret(email, password);
+      const payload: RegisterInput | LoginInput = authMode === "register"
+        ? {
+            email,
+            password,
+            displayName: authForm.displayName.trim() || "NoteSync User"
+          }
+        : {
+            email,
+            password
+          };
+
+      const session = authMode === "register"
+        ? await register(payload as RegisterInput)
+        : await login(payload as LoginInput);
+
+      const nextAuthState: StoredAuthState = { session, syncSecret };
+      await writeStoredAuthState(nextAuthState);
+      setAuthState(nextAuthState);
+      setSyncEnabled(true);
+      setStatusMessage(authMode === "register" ? "Account created." : "Signed in.");
+    } catch (cause) {
+      setStatusMessage(getErrorMessage(cause));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function signOut() {
+    const current = authState;
+    setLoading(true);
+    try {
+      if (current) {
+        await logout(current.session.tokens.refreshToken);
+      }
+    } catch {
+      // best-effort logout
+    } finally {
+      await clearStoredAuthState();
+      setAuthState(null);
+      setSyncEnabled(false);
+      setLoading(false);
+      setStatusMessage("Signed out.");
+    }
+  }
+
+  function changeFormat(nextFormat: NoteFormat) {
+    setDraft((current) => {
+      if (current.format === nextFormat) {
+        return current;
+      }
+
+      return {
+        ...current,
+        format: nextFormat,
+        content: convertNoteContent(current.content, current.format, nextFormat)
+      };
+    });
   }
 
   function openSharePreview() {
-    if (activeNoteId) {
-      void createShare();
-    }
+    void createShare();
   }
 
   return {
     ready,
     error,
+    statusMessage,
     screen,
     draft,
     loading,
     encryptedNoteCount,
+    syncedNoteCount,
     summaries,
     activeStoredNote,
     sharePreview,
     sharePassword,
+    shareSlug,
+    shareAccessPassword,
+    accessedShare,
+    authState,
+    authMode,
+    authForm,
+    syncEnabled,
     setDraft,
     setScreen,
     setSharePassword,
+    setShareSlug,
+    setShareAccessPassword,
+    setAuthMode,
+    setAuthForm,
+    setSyncEnabled,
     startNewNote,
     editNote,
     saveNote,
     createShare,
-    openSharePreview
+    openSharePreview,
+    accessSharedNote,
+    syncNow,
+    exportActiveNote,
+    rotateDeviceKey,
+    submitAuth,
+    signOut,
+    changeFormat
   };
 
   async function bootstrap() {
@@ -168,12 +522,19 @@ export function useNotesApp() {
       const secret = await getOrCreateDeviceSecret();
       setDeviceSecret(secret);
 
-      let currentSummaries = await repository.listSummaries();
+      const restoredAuth = await restoreAuthState();
+      if (restoredAuth) {
+        setAuthState(restoredAuth);
+      }
+
+      let currentSummaries = await repository.listSummaries(secret);
       if (currentSummaries.length === 0) {
         const seedDraft = buildSeedDraft();
         const encryptedSeed = await encryptNoteContent(seedDraft.content, secret);
-        const created = await repository.saveDraft(OWNER_ID, seedDraft, encryptedSeed);
-        currentSummaries = await repository.listSummaries();
+        const created = await repository.saveDraft(OWNER_ID, seedDraft, encryptedSeed, {
+          syncEnabled: false
+        });
+        currentSummaries = await repository.listSummaries(secret);
         await openNote(created.id, secret);
         setScreen("editor");
       } else {
@@ -191,8 +552,8 @@ export function useNotesApp() {
     }
   }
 
-  async function refreshSummaries() {
-    const nextSummaries = await repository.listSummaries();
+  async function refreshSummaries(secretOverride?: string) {
+    const nextSummaries = await repository.listSummaries(secretOverride ?? deviceSecret ?? undefined);
     setSummaries(nextSummaries);
   }
 
@@ -213,6 +574,7 @@ export function useNotesApp() {
       note,
       decryptedContent
     });
+    setSyncEnabled(note.syncEnabled);
     setDraft({
       title: note.title,
       content: decryptedContent,
@@ -220,6 +582,104 @@ export function useNotesApp() {
     });
     setScreen("editor");
   }
+
+  async function ensureFreshAuthState(): Promise<StoredAuthState | null> {
+    const current = authState;
+    if (!current) {
+      return null;
+    }
+
+    try {
+      await fetchCurrentUser(current.session.tokens.accessToken);
+      return current;
+    } catch (cause) {
+      if (!(cause instanceof ApiClientError) || cause.status !== 401) {
+        throw cause;
+      }
+
+      const refreshedSession = await refreshAuthSession(current.session.tokens.refreshToken);
+      const nextState: StoredAuthState = {
+        session: refreshedSession,
+        syncSecret: current.syncSecret
+      };
+      await writeStoredAuthState(nextState);
+      setAuthState(nextState);
+      return nextState;
+    }
+  }
+
+  async function restoreAuthState(): Promise<StoredAuthState | null> {
+    const stored = await readStoredAuthState();
+    if (!stored) {
+      return null;
+    }
+
+    try {
+      const user = await fetchCurrentUser(stored.session.tokens.accessToken);
+      const hydrated: StoredAuthState = {
+        ...stored,
+        session: {
+          ...stored.session,
+          user
+        }
+      };
+      await writeStoredAuthState(hydrated);
+      return hydrated;
+    } catch (cause) {
+      if (!(cause instanceof ApiClientError) || cause.status !== 401) {
+        await clearStoredAuthState();
+        return null;
+      }
+
+      try {
+        const refreshed = await refreshAuthSession(stored.session.tokens.refreshToken);
+        const nextState: StoredAuthState = {
+          session: refreshed,
+          syncSecret: stored.syncSecret
+        };
+        await writeStoredAuthState(nextState);
+        return nextState;
+      } catch {
+        await clearStoredAuthState();
+        return null;
+      }
+    }
+  }
+
+  async function pushNoteToRemote(
+    note: NoteRecord,
+    content: string,
+    sessionState: StoredAuthState
+  ) {
+    const remoteEncryptedContent = await encryptNoteContent(content, sessionState.syncSecret);
+    const payload = {
+      id: note.id,
+      title: note.title,
+      format: note.format,
+      encryptedContent: remoteEncryptedContent,
+      updatedAt: note.updatedAt,
+      syncEnabled: true
+    };
+
+    try {
+      await updateRemoteNote(sessionState.session.tokens.accessToken, note.id, payload);
+    } catch (cause) {
+      if (cause instanceof ApiClientError && cause.status === 404) {
+        await createRemoteNote(sessionState.session.tokens.accessToken, payload);
+        return;
+      }
+
+      throw cause;
+    }
+  }
+}
+
+function getErrorMessage(cause: unknown): string {
+  if (cause instanceof ApiClientError) {
+    return cause.message;
+  }
+
+  return cause instanceof Error ? cause.message : "Unexpected application error.";
 }
 
 function buildSeedDraft(): NoteDraft {
@@ -230,7 +690,7 @@ function buildSeedDraft(): NoteDraft {
   return {
     title: "Offline study notes",
     content:
-      "This is a sample encrypted note.\n\n- Stored locally first\n- Ready to share later",
+      "This is a sample encrypted note.\n\n- Stored locally first\n- Ready to sync or share later",
     format: "markdown"
   };
 }

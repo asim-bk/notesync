@@ -22,6 +22,7 @@ export function buildNoteSummary(note: NoteRecord, decryptedContent: string): No
     format: note.format,
     updatedAt: note.updatedAt,
     syncState: note.syncState,
+    syncEnabled: note.syncEnabled,
     encrypted: true
   };
 }

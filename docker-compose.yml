@@ -1,0 +1,45 @@
+version: "3.9"
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: notesync
+      MYSQL_USER: notesync
+      MYSQL_PASSWORD: notesync
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "3306:3306"
+    volumes:
+      - notesync-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      PORT: 4000
+      HOST: 0.0.0.0
+      JWT_SECRET: notesync-dev-secret
+      ACCESS_TOKEN_TTL_SECONDS: 900
+      REFRESH_TOKEN_TTL_SECONDS: 604800
+      STORE_PROVIDER: prisma
+      DATABASE_URL: mysql://notesync:notesync@mysql:3306/notesync
+    ports:
+      - "4000:4000"
+    command: >
+      sh -c "npm --workspace @notesync/api run prisma:deploy &&
+      npm --workspace @notesync/api run seed &&
+      npm --workspace @notesync/api run start"
+
+volumes:
+  notesync-mysql:

@@ -8,12 +8,13 @@ import {
   View,
   useWindowDimensions
 } from "react-native";
+import type { NoteFormat, NoteSummary } from "@notesync/shared-types";
 import { NoteCard } from "./components/note-card";
 import { useNotesApp } from "./hooks/use-notes-app";
 import { colors } from "./theme";
 
 const SIDEBAR_WIDTH = 320;
-const INSPECTOR_WIDTH = 300;
+const INSPECTOR_WIDTH = 320;
 
 export default function App() {
   const app = useNotesApp();
@@ -24,7 +25,7 @@ export default function App() {
 
   const noteCount = app.summaries.length;
   const protectedCount = app.encryptedNoteCount;
-  const syncedCount = app.summaries.filter((note) => note.syncState === "synced").length;
+  const syncedCount = app.syncedNoteCount;
   const activeSummary = app.summaries.find((note) => note.id === app.activeStoredNote?.note.id) ?? null;
 
   if (!app.ready) {
@@ -33,7 +34,7 @@ export default function App() {
         <View style={styles.loadingScreen}>
           <Text style={styles.brandTitle}>NoteSync</Text>
           <Text style={styles.loadingText}>
-            Preparing encrypted local storage and device keychain access.
+            Preparing encrypted local storage, account session, and sync state.
           </Text>
         </View>
       </SafeAreaView>
@@ -58,14 +59,21 @@ export default function App() {
           <View style={styles.brandBlock}>
             <Text style={styles.brandTitle}>NoteSync</Text>
             <Text style={styles.brandSubtitle}>
-              Private notes, paper-like reading surfaces, secure sharing.
+              Local-first encrypted notes with account sync, protected shares, and export tools.
             </Text>
           </View>
 
           <View style={styles.topBarRight}>
             <View style={styles.statusPill}>
-              <View style={[styles.statusDot, { backgroundColor: colors.success }]} />
-              <Text style={styles.statusPillText}>Device vault active</Text>
+              <View
+                style={[
+                  styles.statusDot,
+                  { backgroundColor: app.authState ? colors.success : colors.warning }
+                ]}
+              />
+              <Text style={styles.statusPillText}>
+                {app.authState ? "Account sync ready" : "Local-only mode"}
+              </Text>
             </View>
             {!isMobile ? (
               <Pressable onPress={() => app.startNewNote()} style={styles.primaryButton}>
@@ -75,14 +83,20 @@ export default function App() {
           </View>
         </View>
 
+        {app.statusMessage ? (
+          <View style={styles.statusBanner}>
+            <Text style={styles.statusBannerText}>{app.statusMessage}</Text>
+          </View>
+        ) : null}
+
         <ScrollView
           horizontal={isMobile}
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={[styles.statsRow, isMobile ? styles.statsRowMobile : null]}
         >
-          <MetricCard label="Encrypted" value={`${protectedCount}`} meta="AES-256-GCM" />
-          <MetricCard label="Available notes" value={`${noteCount}`} meta="Offline first" />
-          <MetricCard label="Synced" value={`${syncedCount}/${noteCount}`} meta="Hybrid model" />
+          <MetricCard label="Encrypted" value={`${protectedCount}`} meta="Device vault" />
+          <MetricCard label="Notes" value={`${noteCount}`} meta="Paper surfaces" />
+          <MetricCard label="Synced" value={`${syncedCount}/${noteCount}`} meta="Account-linked" />
         </ScrollView>
 
         {isMobile ? (
@@ -165,29 +179,29 @@ function renderSidebar(app: ReturnType<typeof useNotesApp>, noteCount: number) {
         <Text style={styles.sectionMeta}>{noteCount} notes</Text>
       </View>
 
-      <View style={styles.filterRow}>
-        <Pill label="Markdown" active />
-        <Pill label="HTML" />
-        <Pill label="RTF" />
+      <View style={styles.quickCreateRow}>
+        <ActionPill label="Markdown" onPress={() => app.startNewNote("markdown")} />
+        <ActionPill label="HTML" onPress={() => app.startNewNote("html")} />
+        <ActionPill label="RTF" onPress={() => app.startNewNote("rtf")} />
       </View>
 
       <ScrollView contentContainerStyle={styles.noteList}>
         {app.summaries.map((note) => (
-        <NoteCard
-          key={note.id}
-          note={note}
-          selected={note.id === app.activeStoredNote?.note.id}
-          onPress={() => void app.editNote(note.id)}
-        />
-      ))}
-    </ScrollView>
+          <NoteCard
+            key={note.id}
+            note={note}
+            selected={note.id === app.activeStoredNote?.note.id}
+            onPress={() => void app.editNote(note.id)}
+          />
+        ))}
+      </ScrollView>
     </>
   );
 }
 
 function renderEditor(
   app: ReturnType<typeof useNotesApp>,
-  activeSummary: { format: string } | null,
+  activeSummary: NoteSummary | null,
   isTablet: boolean
 ) {
   return (
@@ -198,14 +212,31 @@ function renderEditor(
             {app.activeStoredNote ? "Current note" : "Start a secure note"}
           </Text>
           <Text style={styles.editorSubtitle}>
-            Mobile-friendly note writing with a paper reading surface and local encryption.
+            Write locally, opt into account sync when needed, and keep export/share flows close.
           </Text>
         </View>
 
         <View style={styles.headerBadges}>
-          <Pill label={activeSummary?.format.toUpperCase() ?? "MARKDOWN"} active />
-          <Pill label="Paper view" />
-          <Pill label="Offline" />
+          <ActionPill
+            label="MD"
+            active={app.draft.format === "markdown"}
+            onPress={() => app.changeFormat("markdown")}
+          />
+          <ActionPill
+            label="HTML"
+            active={app.draft.format === "html"}
+            onPress={() => app.changeFormat("html")}
+          />
+          <ActionPill
+            label="RTF"
+            active={app.draft.format === "rtf"}
+            onPress={() => app.changeFormat("rtf")}
+          />
+          <ActionPill
+            label={app.syncEnabled ? "Sync on" : "Local only"}
+            active={app.syncEnabled}
+            onPress={() => app.setSyncEnabled(!app.syncEnabled)}
+          />
         </View>
       </View>
 
@@ -224,12 +255,14 @@ function renderEditor(
         <View style={styles.inputGroup}>
           <View style={styles.fieldHeaderRow}>
             <Text style={styles.fieldLabel}>Content</Text>
-            <Text style={styles.fieldHint}>Markdown editor</Text>
+            <Text style={styles.fieldHint}>
+              {activeSummary?.format.toUpperCase() ?? app.draft.format.toUpperCase()}
+            </Text>
           </View>
           <TextInput
             multiline
             onChangeText={(content) => app.setDraft((current) => ({ ...current, content }))}
-            placeholder="Capture structured notes, references and action items."
+            placeholder="Capture structured notes, references, and action items."
             placeholderTextColor={colors.inkSoft}
             style={styles.contentInput}
             textAlignVertical="top"
@@ -238,8 +271,12 @@ function renderEditor(
         </View>
 
         <View style={[styles.actionsRow, !isTablet ? styles.actionsRowStacked : null]}>
-          <Pressable onPress={() => app.setScreen("list")} style={styles.secondaryButton}>
-            <Text style={styles.secondaryButtonText}>Return to notes</Text>
+          <Pressable
+            disabled={app.loading}
+            onPress={() => void app.syncNow()}
+            style={styles.secondaryButton}
+          >
+            <Text style={styles.secondaryButtonText}>Sync now</Text>
           </Pressable>
           <Pressable
             disabled={app.loading}
@@ -247,7 +284,7 @@ function renderEditor(
             style={styles.primaryButtonLarge}
           >
             <Text style={styles.primaryButtonText}>
-              {app.loading ? "Encrypting..." : "Save encrypted note"}
+              {app.loading ? "Working..." : "Save encrypted note"}
             </Text>
           </Pressable>
         </View>
@@ -258,42 +295,133 @@ function renderEditor(
 
 function renderInspector(app: ReturnType<typeof useNotesApp>) {
   return (
-    <>
+    <ScrollView contentContainerStyle={styles.inspectorScroll}>
       <View style={styles.inspectorSection}>
         <Text style={styles.sectionTitle}>Security</Text>
         <View style={styles.securityList}>
-          <SecurityRow label="Local ownership" value="Stored on device" />
-          <SecurityRow label="Cipher" value="AES-256-GCM" />
-          <SecurityRow label="Share access" value="URL + password" />
-          <SecurityRow label="Session model" value="JWT API auth" />
+          <SecurityRow label="Local vault" value="AES-256-GCM" />
+          <SecurityRow
+            label="Account session"
+            value={app.authState ? app.authState.session.user.email : "Not connected"}
+          />
+          <SecurityRow label="Active note mode" value={app.syncEnabled ? "Sync enabled" : "Local only"} />
+          <SecurityRow label="Share gate" value="Slug + password" />
         </View>
+        <Pressable onPress={() => void app.rotateDeviceKey()} style={styles.secondaryButtonCompact}>
+          <Text style={styles.secondaryButtonText}>Rotate device key</Text>
+        </Pressable>
+      </View>
+
+      <View style={styles.inspectorSection}>
+        <Text style={styles.sectionTitle}>Account</Text>
+        {app.authState ? (
+          <>
+            <Text style={styles.panelCopy}>
+              Connected as {app.authState.session.user.displayName}. Sync and live share use this session.
+            </Text>
+            <Pressable onPress={() => void app.signOut()} style={styles.secondaryButtonCompact}>
+              <Text style={styles.secondaryButtonText}>Sign out</Text>
+            </Pressable>
+          </>
+        ) : (
+          <>
+            <View style={styles.segmentedRow}>
+              <SegmentButton
+                label="Register"
+                active={app.authMode === "register"}
+                onPress={() => app.setAuthMode("register")}
+              />
+              <SegmentButton
+                label="Login"
+                active={app.authMode === "login"}
+                onPress={() => app.setAuthMode("login")}
+              />
+            </View>
+            {app.authMode === "register" ? (
+              <TextInput
+                onChangeText={(displayName) => app.setAuthForm((current) => ({ ...current, displayName }))}
+                placeholder="Display name"
+                placeholderTextColor={colors.textSoft}
+                style={styles.inlineInput}
+                value={app.authForm.displayName}
+              />
+            ) : null}
+            <TextInput
+              autoCapitalize="none"
+              keyboardType="email-address"
+              onChangeText={(email) => app.setAuthForm((current) => ({ ...current, email }))}
+              placeholder="Email"
+              placeholderTextColor={colors.textSoft}
+              style={styles.inlineInput}
+              value={app.authForm.email}
+            />
+            <TextInput
+              autoCapitalize="none"
+              onChangeText={(password) => app.setAuthForm((current) => ({ ...current, password }))}
+              placeholder="Password"
+              placeholderTextColor={colors.textSoft}
+              secureTextEntry
+              style={styles.inlineInput}
+              value={app.authForm.password}
+            />
+            <Pressable onPress={() => void app.submitAuth()} style={styles.accentButton}>
+              <Text style={styles.primaryButtonText}>
+                {app.authMode === "register" ? "Create account" : "Sign in"}
+              </Text>
+            </Pressable>
+          </>
+        )}
       </View>
 
       <View style={styles.inspectorSection}>
         <Text style={styles.sectionTitle}>Share panel</Text>
         <Text style={styles.panelCopy}>
-          Generate a protected note preview with optional password control and limited views.
+          Share creation encrypts note content again with the share password before sending it to the API.
         </Text>
         <TextInput
           onChangeText={app.setSharePassword}
-          placeholder="Optional share password"
+          placeholder="Share password"
           placeholderTextColor={colors.textSoft}
           secureTextEntry
           style={styles.inlineInput}
           value={app.sharePassword}
         />
         <Pressable onPress={() => void app.openSharePreview()} style={styles.accentButton}>
-          <Text style={styles.primaryButtonText}>Generate secure preview</Text>
+          <Text style={styles.primaryButtonText}>Create secure share</Text>
         </Pressable>
       </View>
 
       <View style={styles.inspectorSection}>
-        <Text style={styles.sectionTitle}>Export targets</Text>
+        <Text style={styles.sectionTitle}>Share access</Text>
+        <TextInput
+          autoCapitalize="none"
+          onChangeText={app.setShareSlug}
+          placeholder="Share slug"
+          placeholderTextColor={colors.textSoft}
+          style={styles.inlineInput}
+          value={app.shareSlug}
+        />
+        <TextInput
+          onChangeText={app.setShareAccessPassword}
+          placeholder="Share password"
+          placeholderTextColor={colors.textSoft}
+          secureTextEntry
+          style={styles.inlineInput}
+          value={app.shareAccessPassword}
+        />
+        <Pressable onPress={() => void app.accessSharedNote()} style={styles.secondaryButtonCompact}>
+          <Text style={styles.secondaryButtonText}>Open shared note</Text>
+        </Pressable>
+      </View>
+
+      <View style={styles.inspectorSection}>
+        <Text style={styles.sectionTitle}>Export</Text>
         <View style={styles.filterRowWrap}>
-          <Pill label="PDF" active />
-          <Pill label="Word" />
-          <Pill label="Markdown" />
-          <Pill label="HTML" />
+          <ActionPill label="PDF" onPress={() => void app.exportActiveNote("pdf")} />
+          <ActionPill label="DOCX" onPress={() => void app.exportActiveNote("docx")} />
+          <ActionPill label="MD" onPress={() => void app.exportActiveNote("markdown")} />
+          <ActionPill label="HTML" onPress={() => void app.exportActiveNote("html")} />
+          <ActionPill label="RTF" onPress={() => void app.exportActiveNote("rtf")} />
         </View>
       </View>
 
@@ -314,11 +442,28 @@ function renderInspector(app: ReturnType<typeof useNotesApp>) {
           </View>
         ) : (
           <View style={styles.emptyPanel}>
-            <Text style={styles.emptyPanelText}>No share generated yet.</Text>
+            <Text style={styles.emptyPanelText}>No live share created yet.</Text>
           </View>
         )}
       </View>
-    </>
+
+      <View style={styles.inspectorSection}>
+        <Text style={styles.sectionTitle}>Opened share</Text>
+        {app.accessedShare ? (
+          <View style={styles.sharedReadCard}>
+            <Text style={styles.sharedReadTitle}>{app.accessedShare.title}</Text>
+            <Text style={styles.sharedReadMeta}>
+              {app.accessedShare.format.toUpperCase()} · {new Date(app.accessedShare.createdAt).toLocaleDateString()}
+            </Text>
+            <Text style={styles.sharedReadBody}>{app.accessedShare.content}</Text>
+          </View>
+        ) : (
+          <View style={styles.emptyPanel}>
+            <Text style={styles.emptyPanelText}>Open a shared note to inspect decrypted content.</Text>
+          </View>
+        )}
+      </View>
+    </ScrollView>
   );
 }
 
@@ -332,18 +477,34 @@ function MetricCard(props: { label: string; value: string; meta: string }) {
   );
 }
 
-function Pill(props: { label: string; active?: boolean }) {
+function ActionPill(props: { label: string; active?: boolean; onPress(): void }) {
   return (
-    <View style={[styles.pill, props.active ? styles.pillActive : null]}>
+    <Pressable onPress={props.onPress} style={[styles.pill, props.active ? styles.pillActive : null]}>
       <Text style={[styles.pillText, props.active ? styles.pillTextActive : null]}>{props.label}</Text>
-    </View>
+    </Pressable>
   );
 }
 
 function SwitchButton(props: { label: string; active?: boolean; onPress(): void }) {
   return (
-    <Pressable onPress={props.onPress} style={[styles.switchButton, props.active ? styles.switchButtonActive : null]}>
+    <Pressable
+      onPress={props.onPress}
+      style={[styles.switchButton, props.active ? styles.switchButtonActive : null]}
+    >
       <Text style={[styles.switchButtonText, props.active ? styles.switchButtonTextActive : null]}>
+        {props.label}
+      </Text>
+    </Pressable>
+  );
+}
+
+function SegmentButton(props: { label: string; active?: boolean; onPress(): void }) {
+  return (
+    <Pressable
+      onPress={props.onPress}
+      style={[styles.segmentButton, props.active ? styles.segmentButtonActive : null]}
+    >
+      <Text style={[styles.segmentButtonText, props.active ? styles.segmentButtonTextActive : null]}>
         {props.label}
       </Text>
     </Pressable>
@@ -394,7 +555,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
     marginTop: 10,
-    maxWidth: 320,
+    maxWidth: 340,
     textAlign: "center"
   },
   errorText: {
@@ -455,6 +616,20 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 13,
     fontWeight: "600"
+  },
+  statusBanner: {
+    backgroundColor: colors.panel,
+    borderColor: colors.border,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12
+  },
+  statusBannerText: {
+    color: colors.textMuted,
+    fontSize: 13,
+    lineHeight: 19
   },
   statsRow: {
     flexDirection: "row",
@@ -553,7 +728,7 @@ const styles = StyleSheet.create({
     color: colors.textSoft,
     fontSize: 12
   },
-  filterRow: {
+  quickCreateRow: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
@@ -624,10 +799,10 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     color: colors.ink,
-    fontSize: 18,
-    minHeight: 54,
+    fontSize: 16,
+    minHeight: 52,
     paddingHorizontal: 14,
-    paddingVertical: 14
+    paddingVertical: 12
   },
   contentInput: {
     backgroundColor: colors.paper,
@@ -637,24 +812,85 @@ const styles = StyleSheet.create({
     color: colors.ink,
     fontSize: 15,
     lineHeight: 22,
-    minHeight: 340,
-    padding: 16
+    minHeight: 320,
+    paddingHorizontal: 14,
+    paddingVertical: 14
   },
   actionsRow: {
     flexDirection: "row",
-    gap: 12,
+    gap: 10,
     justifyContent: "flex-end"
   },
   actionsRowStacked: {
-    flexDirection: "column"
+    flexDirection: "column-reverse"
+  },
+  primaryButton: {
+    alignItems: "center",
+    backgroundColor: colors.primaryStrong,
+    borderRadius: 8,
+    justifyContent: "center",
+    minHeight: 40,
+    paddingHorizontal: 16
+  },
+  primaryButtonLarge: {
+    alignItems: "center",
+    backgroundColor: colors.primaryStrong,
+    borderRadius: 8,
+    flex: 1,
+    justifyContent: "center",
+    minHeight: 48,
+    paddingHorizontal: 16
+  },
+  accentButton: {
+    alignItems: "center",
+    backgroundColor: colors.primaryAlt,
+    borderRadius: 8,
+    justifyContent: "center",
+    minHeight: 44,
+    paddingHorizontal: 16
+  },
+  primaryButtonText: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: "700"
+  },
+  secondaryButton: {
+    alignItems: "center",
+    backgroundColor: colors.panel,
+    borderColor: colors.border,
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 48,
+    minWidth: 120,
+    paddingHorizontal: 16
+  },
+  secondaryButtonCompact: {
+    alignItems: "center",
+    backgroundColor: colors.panel,
+    borderColor: colors.border,
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 44,
+    paddingHorizontal: 16
+  },
+  secondaryButtonText: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: "700"
   },
   inspector: {
     backgroundColor: colors.bgElevated,
     borderColor: colors.border,
     borderRadius: 8,
     borderWidth: 1,
-    gap: 14,
+    minHeight: 0,
     padding: 14
+  },
+  inspectorScroll: {
+    gap: 14,
+    paddingBottom: 12
   },
   inspectorSection: {
     backgroundColor: colors.panel,
@@ -664,176 +900,178 @@ const styles = StyleSheet.create({
     gap: 12,
     padding: 14
   },
-  panelCopy: {
-    color: colors.textMuted,
-    fontSize: 13,
-    lineHeight: 20
-  },
   securityList: {
     gap: 10
   },
-  infoRow: {
-    borderBottomColor: colors.border,
-    borderBottomWidth: 1,
-    gap: 4,
-    paddingBottom: 10
-  },
-  infoLabel: {
-    color: colors.textSoft,
-    fontSize: 12
-  },
-  infoValue: {
-    color: colors.text,
-    fontSize: 14,
-    fontWeight: "600"
+  panelCopy: {
+    color: colors.textMuted,
+    fontSize: 13,
+    lineHeight: 19
   },
   inlineInput: {
-    backgroundColor: colors.panelMuted,
+    backgroundColor: colors.bgElevated,
     borderColor: colors.border,
     borderRadius: 8,
     borderWidth: 1,
     color: colors.text,
-    minHeight: 48,
+    fontSize: 14,
+    minHeight: 44,
     paddingHorizontal: 14,
-    paddingVertical: 12
-  },
-  emptyPanel: {
-    alignItems: "center",
-    borderColor: colors.border,
-    borderRadius: 8,
-    borderStyle: "dashed",
-    borderWidth: 1,
-    justifyContent: "center",
-    minHeight: 96,
-    padding: 18
-  },
-  emptyPanelText: {
-    color: colors.textSoft,
-    fontSize: 13
-  },
-  sharePreviewCard: {
-    gap: 10
-  },
-  infoLine: {
-    alignItems: "center",
-    flexDirection: "row",
-    justifyContent: "space-between"
-  },
-  infoLineLabel: {
-    color: colors.textSoft,
-    fontSize: 12
-  },
-  infoLineValue: {
-    color: colors.text,
-    flexShrink: 1,
-    fontSize: 13,
-    fontWeight: "600",
-    marginLeft: 12,
-    textAlign: "right"
+    paddingVertical: 10
   },
   pill: {
+    alignItems: "center",
     backgroundColor: colors.panelMuted,
     borderColor: colors.border,
     borderRadius: 999,
     borderWidth: 1,
     justifyContent: "center",
-    minHeight: 32,
+    minHeight: 34,
     paddingHorizontal: 12
   },
   pillActive: {
-    backgroundColor: colors.panelSoft,
-    borderColor: colors.borderStrong
+    backgroundColor: colors.primaryStrong,
+    borderColor: colors.primaryStrong
   },
   pillText: {
     color: colors.textMuted,
     fontSize: 12,
-    fontWeight: "600"
+    fontWeight: "700"
   },
   pillTextActive: {
     color: colors.text
   },
-  primaryButton: {
-    alignItems: "center",
-    backgroundColor: colors.primaryStrong,
+  segmentedRow: {
+    backgroundColor: colors.bgElevated,
+    borderColor: colors.border,
     borderRadius: 8,
-    justifyContent: "center",
-    minHeight: 42,
-    paddingHorizontal: 16,
-    paddingVertical: 12
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 8,
+    padding: 6
   },
-  primaryButtonLarge: {
+  segmentButton: {
     alignItems: "center",
-    backgroundColor: colors.primaryStrong,
-    borderRadius: 8,
+    borderRadius: 6,
     flex: 1,
     justifyContent: "center",
-    minHeight: 48,
-    paddingHorizontal: 18,
-    paddingVertical: 12
+    minHeight: 36
   },
-  accentButton: {
-    alignItems: "center",
-    backgroundColor: colors.primaryAlt,
-    borderRadius: 8,
-    justifyContent: "center",
-    minHeight: 44,
-    paddingHorizontal: 16,
-    paddingVertical: 12
+  segmentButtonActive: {
+    backgroundColor: colors.panelSoft
   },
-  primaryButtonText: {
-    color: colors.text,
-    fontSize: 14,
+  segmentButtonText: {
+    color: colors.textSoft,
+    fontSize: 13,
     fontWeight: "700"
   },
-  secondaryButton: {
+  segmentButtonTextActive: {
+    color: colors.text
+  },
+  infoRow: {
     alignItems: "center",
-    backgroundColor: colors.panelSoft,
+    flexDirection: "row",
+    gap: 10,
+    justifyContent: "space-between"
+  },
+  infoLabel: {
+    color: colors.textMuted,
+    flex: 1,
+    fontSize: 12,
+    fontWeight: "600"
+  },
+  infoValue: {
+    color: colors.text,
+    flex: 1,
+    fontSize: 12,
+    textAlign: "right"
+  },
+  sharePreviewCard: {
+    backgroundColor: colors.bgElevated,
+    borderColor: colors.border,
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 12,
+    padding: 12
+  },
+  infoLine: {
+    gap: 4
+  },
+  infoLineLabel: {
+    color: colors.textSoft,
+    fontSize: 11,
+    textTransform: "uppercase"
+  },
+  infoLineValue: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: "600"
+  },
+  emptyPanel: {
+    alignItems: "center",
+    backgroundColor: colors.bgElevated,
     borderColor: colors.border,
     borderRadius: 8,
     borderWidth: 1,
     justifyContent: "center",
-    minHeight: 48,
-    paddingHorizontal: 16,
-    paddingVertical: 12
+    minHeight: 88,
+    paddingHorizontal: 14
   },
-  secondaryButtonText: {
-    color: colors.text,
+  emptyPanelText: {
+    color: colors.textSoft,
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: "center"
+  },
+  sharedReadCard: {
+    backgroundColor: colors.paper,
+    borderColor: "#d7ceb8",
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 10,
+    padding: 14
+  },
+  sharedReadTitle: {
+    color: colors.ink,
+    fontSize: 17,
+    fontWeight: "800"
+  },
+  sharedReadMeta: {
+    color: colors.inkSoft,
+    fontSize: 12
+  },
+  sharedReadBody: {
+    color: colors.ink,
     fontSize: 14,
-    fontWeight: "600"
+    lineHeight: 21
   },
   mobileBottomBar: {
-    backgroundColor: colors.overlay,
+    backgroundColor: colors.panel,
     borderColor: colors.border,
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 1,
     flexDirection: "row",
     gap: 10,
     marginTop: 12,
-    padding: 10
+    padding: 8
+  },
+  mobileGhostButton: {
+    alignItems: "center",
+    flex: 1,
+    justifyContent: "center",
+    minHeight: 42
+  },
+  mobileGhostButtonText: {
+    color: colors.textMuted,
+    fontSize: 13,
+    fontWeight: "600"
   },
   mobilePrimaryButton: {
     alignItems: "center",
     backgroundColor: colors.primaryStrong,
-    borderRadius: 10,
-    flex: 1.3,
-    justifyContent: "center",
-    minHeight: 48,
-    paddingHorizontal: 12
-  },
-  mobileGhostButton: {
-    alignItems: "center",
-    backgroundColor: colors.panel,
-    borderColor: colors.border,
-    borderRadius: 10,
-    borderWidth: 1,
+    borderRadius: 8,
     flex: 1,
     justifyContent: "center",
-    minHeight: 48,
-    paddingHorizontal: 12
-  },
-  mobileGhostButtonText: {
-    color: colors.text,
-    fontSize: 13,
-    fontWeight: "600"
+    minHeight: 42
   }
 });

@@ -16,6 +16,22 @@ Ana kararlar:
 - Not sifreleme: `AES-256-GCM`
 - Ortak is kurallari ve tipler: monorepo icindeki paylasilan paketler
 
+## Mevcut Durum
+
+Bu repo artik sadece iskelet degil. Su akislari calisir durumda:
+
+- local encrypted note kaydi
+- native `expo-sqlite` / web local persistence
+- `expo-secure-store` ile device secret
+- register / login / refresh / logout
+- auth rate limit
+- remote secure share olusturma ve slug + password ile acma
+- Markdown / HTML / RTF format degistirme
+- PDF / DOCX / Markdown / HTML / RTF export
+- local sync queue ve manuel account sync
+- Prisma + MySQL persistence path
+- test ve CI workflow
+
 ## Neden MAUI Degil?
 
 `React Native` tarafi, mobil gelistirme hizi, ekosistem ve ekip bulunabilirligi acisindan daha guclu bir tercih. Ancak burada bir teknik not var:
@@ -136,4 +152,43 @@ Sifreleme mantigi tek yerde tutulur:
 
 ## Sonraki Adim
 
-Bir sonraki mantikli adim, `apps/api` ve `apps/mobile` icin calisabilir ilk iskeleti olusturmak. Bu repoda bunun icin klasor ve temel config yapisini da ekledim.
+## Calistirma
+
+### 1. Bagimliliklar
+
+```bash
+npm install
+```
+
+### 2. Sadece API
+
+```bash
+cp apps/api/.env.example apps/api/.env
+npm --workspace @notesync/api run dev
+```
+
+### 3. MySQL + API (Docker ile)
+
+```bash
+docker compose up --build
+```
+
+### 4. Expo web
+
+```bash
+EXPO_PUBLIC_API_BASE_URL=http://localhost:4000 npm run dev:web
+```
+
+### 5. Testler
+
+```bash
+npm test
+```
+
+### 6. Build
+
+```bash
+npm run build
+```
+
+Detayli deployment notlari icin: `docs/deployment.md`

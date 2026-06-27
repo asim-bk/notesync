@@ -11,6 +11,7 @@ export interface NoteSummary {
   format: NoteFormat;
   updatedAt: ISODateString;
   syncState: SyncState;
+  syncEnabled: boolean;
   encrypted: boolean;
 }
 
@@ -32,6 +33,7 @@ export interface NoteRecord {
   createdAt: ISODateString;
   updatedAt: ISODateString;
   syncState: SyncState;
+  syncEnabled: boolean;
 }
 
 export interface NoteDraft {
@@ -41,9 +43,12 @@ export interface NoteDraft {
 }
 
 export interface CreateNoteInput {
+  id?: string;
   title: string;
   format: NoteFormat;
   encryptedContent: EncryptedNoteContent;
+  updatedAt?: ISODateString;
+  syncEnabled?: boolean;
 }
 
 export interface UpdateNoteInput {
@@ -51,6 +56,8 @@ export interface UpdateNoteInput {
   format?: NoteFormat;
   encryptedContent?: EncryptedNoteContent;
   status?: NoteStatus;
+  updatedAt?: ISODateString;
+  syncEnabled?: boolean;
 }
 
 export interface UserProfile {
@@ -69,6 +76,10 @@ export interface RegisterInput {
 export interface LoginInput {
   email: string;
   password: string;
+}
+
+export interface RefreshTokenInput {
+  refreshToken: string;
 }
 
 export interface AuthTokens {
@@ -109,6 +120,10 @@ export interface CreateShareInput {
   password?: string;
   expiresAt?: ISODateString;
   maxViews?: number;
+}
+
+export interface ShareCreationResult extends ShareRecord {
+  url: string;
 }
 
 export interface SharedNoteAccessRequest {

@@ -10,7 +10,13 @@ export async function getOrCreateDeviceSecret(): Promise<string> {
     return existingSecret;
   }
 
-  const nextSecret = createSecret();
+  const nextSecret = generateDeviceSecret();
+  await writeSecret(nextSecret);
+  return nextSecret;
+}
+
+export async function rotateStoredDeviceSecret(): Promise<string> {
+  const nextSecret = generateDeviceSecret();
   await writeSecret(nextSecret);
   return nextSecret;
 }
@@ -34,7 +40,7 @@ async function writeSecret(secret: string): Promise<void> {
   });
 }
 
-function createSecret(): string {
+function generateDeviceSecret(): string {
   if (globalThis.crypto?.getRandomValues) {
     const bytes = globalThis.crypto.getRandomValues(new Uint8Array(32));
     return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");

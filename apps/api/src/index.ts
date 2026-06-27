@@ -5,6 +5,7 @@ async function start() {
   const app = createApp();
 
   try {
+    await app.store.healthcheck();
     await app.listen({
       port: config.port,
       host: config.host

@@ -9,65 +9,22 @@ import type {
 } from "@notesync/shared-types";
 import { createLocalId } from "../lib/id";
 import { buildNoteSummary, sortNoteSummaries } from "../lib/note-utils";
+import { decryptNoteContent } from "../lib/web-crypto";
+import {
+  appendWebNoteVersion,
+  createEmptyWebState,
+  enqueueWebSyncState,
+  migrateWebState,
+  type NoteVersionEntry,
+  type PendingSyncQueueItem,
+  SCHEMA_VERSION,
+  type SqliteNoteRow,
+  upsertWebNoteState,
+  type WebLocalState,
+  WEB_STORAGE_KEY
+} from "./local-note-web-state";
 
 const DATABASE_NAME = "notesync.db";
-const WEB_STORAGE_KEY = "notesync.local-state.v1";
-
-interface SqliteNoteRow {
-  id: string;
-  owner_id: string;
-  title: string;
-  format: NoteRecord["format"];
-  status: NoteRecord["status"];
-  sync_state: NoteRecord["syncState"];
-  preview: string;
-  cipher_text: string;
-  iv: string;
-  salt: string;
-  algorithm: EncryptedNoteContent["algorithm"];
-  encryption_version: number;
-  created_at: string;
-  updated_at: string;
-}
-
-interface WebLocalState {
-  notes: SqliteNoteRow[];
-  noteVersions: Array<{
-    id: string;
-    noteId: string;
-    cipherText: string;
-    iv: string;
-    salt: string;
-    algorithm: string;
-    encryptionVersion: number;
-    createdAt: string;
-  }>;
-  pendingSyncQueue: Array<{
-    id: string;
-    entityType: string;
-    entityId: string;
-    operation: string;
-    payloadJson: string;
-    createdAt: string;
-  }>;
-  shareHistory: Array<{
-    id: string;
-    noteId: string;
-    shareSlug: string;
-    passwordProtected: boolean;
-    maxViews?: number;
-    createdAt: string;
-  }>;
-}
-
-function createEmptyWebState(): WebLocalState {
-  return {
-    notes: [],
-    noteVersions: [],
-    pendingSyncQueue: [],
-    shareHistory: []
-  };
-}
 
 export class LocalNoteRepository {
   private initialized = false;
@@ -80,7 +37,7 @@ export class LocalNoteRepository {
     }
 
     if (Platform.OS === "web") {
-      this.webState = readWebState();
+      this.webState = migrateWebState(readWebState());
       this.initialized = true;
       return;
     }
@@ -89,6 +46,11 @@ export class LocalNoteRepository {
     await this.database.execAsync(`
       PRAGMA journal_mode = WAL;
 
+      CREATE TABLE IF NOT EXISTS app_meta (
+        key TEXT PRIMARY KEY NOT NULL,
+        value TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS notes (
         id TEXT PRIMARY KEY NOT NULL,
         owner_id TEXT NOT NULL,
@@ -96,7 +58,8 @@ export class LocalNoteRepository {
         format TEXT NOT NULL,
         status TEXT NOT NULL,
         sync_state TEXT NOT NULL,
-        preview TEXT NOT NULL,
+        sync_enabled INTEGER NOT NULL DEFAULT 0,
+        preview TEXT NOT NULL DEFAULT '',
         cipher_text TEXT NOT NULL,
         iv TEXT NOT NULL,
         salt TEXT NOT NULL,
@@ -141,19 +104,43 @@ export class LocalNoteRepository {
       CREATE INDEX IF NOT EXISTS idx_share_history_note_id ON share_history(note_id);
     `);
 
+    await ensureColumn(this.database, "notes", "sync_enabled", "INTEGER NOT NULL DEFAULT 0");
+    await ensureColumn(this.database, "notes", "preview", "TEXT NOT NULL DEFAULT ''");
+    await this.database.runAsync(
+      `INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)`,
+      ["schema_version", `${SCHEMA_VERSION}`]
+    );
+
     this.initialized = true;
   }
 
-  async listSummaries(): Promise<NoteSummary[]> {
+  async listSummaries(secret?: string): Promise<NoteSummary[]> {
     await this.initialize();
-    const rows = Platform.OS === "web"
-      ? this.webState.notes
-      : await this.getDatabase().getAllAsync<SqliteNoteRow>(
-          "SELECT * FROM notes ORDER BY updated_at DESC"
-        );
+    const rows = await this.listRows();
 
-    const summaries = rows.map((row) => buildNoteSummary(mapRowToNoteRecord(row), row.preview));
+    const summaries = await Promise.all(
+      rows.map(async (row) => {
+        const note = mapRowToNoteRecord(row);
+        const preview = await this.decryptPreview(note, secret);
+        return buildNoteSummary(note, preview);
+      })
+    );
+
     return sortNoteSummaries(summaries);
+  }
+
+  async listSyncEnabledNotes(): Promise<NoteRecord[]> {
+    await this.initialize();
+    const rows = await this.listRows();
+    return rows
+      .filter((row) => row.sync_enabled === 1)
+      .map((row) => mapRowToNoteRecord(row));
+  }
+
+  async listAllNotes(): Promise<NoteRecord[]> {
+    await this.initialize();
+    const rows = await this.listRows();
+    return rows.map((row) => mapRowToNoteRecord(row));
   }
 
   async getById(noteId: string): Promise<NoteRecord | undefined> {
@@ -171,7 +158,8 @@ export class LocalNoteRepository {
   async saveDraft(
     ownerId: string,
     draft: NoteDraft,
-    encryptedContent: EncryptedNoteContent
+    encryptedContent: EncryptedNoteContent,
+    options?: { syncEnabled?: boolean }
   ): Promise<NoteRecord> {
     await this.initialize();
 
@@ -185,21 +173,29 @@ export class LocalNoteRepository {
       status: "active",
       createdAt: now,
       updatedAt: now,
-      syncState: "local-only"
+      syncState: options?.syncEnabled ? "pending-sync" : "local-only",
+      syncEnabled: Boolean(options?.syncEnabled)
     };
 
-    const preview = buildPreview(draft.content);
-    await this.persistNote(note, preview);
+    await this.persistNote(note);
     await this.persistVersion(note);
-    await this.enqueueSync(note.id, "create-note", note);
+    if (note.syncEnabled) {
+      await this.enqueueSync(note.id, "upsert-note", note);
+    }
 
     return note;
+  }
+
+  async upsertNoteRecord(note: NoteRecord): Promise<void> {
+    await this.initialize();
+    await this.persistNote(note);
   }
 
   async updateDraft(
     noteId: string,
     draft: NoteDraft,
-    encryptedContent: EncryptedNoteContent
+    encryptedContent: EncryptedNoteContent,
+    options?: { syncEnabled?: boolean }
   ): Promise<NoteRecord | undefined> {
     await this.initialize();
 
@@ -208,21 +204,164 @@ export class LocalNoteRepository {
       return undefined;
     }
 
+    const syncEnabled = options?.syncEnabled ?? existing.syncEnabled;
     const updated: NoteRecord = {
       ...existing,
       title: draft.title.trim() || "Untitled note",
       format: draft.format,
       encryptedContent,
       updatedAt: new Date().toISOString(),
-      syncState: "pending-sync"
+      syncState: syncEnabled ? "pending-sync" : "local-only",
+      syncEnabled
     };
 
-    const preview = buildPreview(draft.content);
-    await this.persistNote(updated, preview);
+    await this.persistNote(updated);
     await this.persistVersion(updated);
-    await this.enqueueSync(updated.id, "update-note", updated);
+    if (updated.syncEnabled) {
+      await this.enqueueSync(updated.id, "upsert-note", updated);
+    }
 
     return updated;
+  }
+
+  async archive(noteId: string): Promise<NoteRecord | undefined> {
+    const note = await this.getById(noteId);
+    if (!note) {
+      return undefined;
+    }
+
+    const archived: NoteRecord = {
+      ...note,
+      status: "archived",
+      updatedAt: new Date().toISOString(),
+      syncState: note.syncEnabled ? "pending-sync" : "local-only"
+    };
+
+    await this.persistNote(archived);
+    if (archived.syncEnabled) {
+      await this.enqueueSync(archived.id, "upsert-note", archived);
+    }
+
+    return archived;
+  }
+
+  async remove(noteId: string): Promise<void> {
+    await this.initialize();
+    const existing = await this.getById(noteId);
+
+    if (Platform.OS === "web") {
+      this.webState.notes = this.webState.notes.filter((candidate) => candidate.id !== noteId);
+      this.webState.noteVersions = this.webState.noteVersions.filter(
+        (candidate) => candidate.noteId !== noteId
+      );
+      if (existing?.syncEnabled) {
+        this.webState.pendingSyncQueue.unshift({
+          id: createLocalId("sync"),
+          entityType: "note",
+          entityId: noteId,
+          operation: "delete-note",
+          payloadJson: JSON.stringify({ id: noteId }),
+          createdAt: new Date().toISOString()
+        });
+      }
+      writeWebState(this.webState);
+      return;
+    }
+
+    const database = this.getDatabase();
+    await database.runAsync("DELETE FROM note_versions WHERE note_id = ?", [noteId]);
+    await database.runAsync("DELETE FROM notes WHERE id = ?", [noteId]);
+
+    if (existing?.syncEnabled) {
+      await database.runAsync(
+        `INSERT INTO pending_sync_queue (
+          id, entity_type, entity_id, operation, payload_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          createLocalId("sync"),
+          "note",
+          noteId,
+          "delete-note",
+          JSON.stringify({ id: noteId }),
+          new Date().toISOString()
+        ]
+      );
+    }
+  }
+
+  async listHistory(noteId: string): Promise<NoteVersionEntry[]> {
+    await this.initialize();
+
+    if (Platform.OS === "web") {
+      return this.webState.noteVersions
+        .filter((entry) => entry.noteId === noteId)
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    }
+
+    return this.getDatabase().getAllAsync<NoteVersionEntry>(
+      `SELECT
+        id,
+        note_id as noteId,
+        cipher_text as cipherText,
+        iv,
+        salt,
+        algorithm,
+        encryption_version as encryptionVersion,
+        created_at as createdAt
+      FROM note_versions
+      WHERE note_id = ?
+      ORDER BY created_at DESC`,
+      [noteId]
+    );
+  }
+
+  async listPendingSyncQueue(): Promise<PendingSyncQueueItem[]> {
+    await this.initialize();
+
+    if (Platform.OS === "web") {
+      return [...this.webState.pendingSyncQueue];
+    }
+
+    return this.getDatabase().getAllAsync<PendingSyncQueueItem>(
+      `SELECT
+        id,
+        entity_type as entityType,
+        entity_id as entityId,
+        operation,
+        payload_json as payloadJson,
+        created_at as createdAt
+      FROM pending_sync_queue
+      ORDER BY created_at ASC`
+    );
+  }
+
+  async dequeueSyncItem(itemId: string): Promise<void> {
+    await this.initialize();
+
+    if (Platform.OS === "web") {
+      this.webState.pendingSyncQueue = this.webState.pendingSyncQueue.filter(
+        (item) => item.id !== itemId
+      );
+      writeWebState(this.webState);
+      return;
+    }
+
+    await this.getDatabase().runAsync("DELETE FROM pending_sync_queue WHERE id = ?", [itemId]);
+  }
+
+  async markNoteSynced(noteId: string): Promise<void> {
+    await this.initialize();
+    const note = await this.getById(noteId);
+    if (!note) {
+      return;
+    }
+
+    const synced: NoteRecord = {
+      ...note,
+      syncState: note.syncEnabled ? "synced" : "local-only"
+    };
+
+    await this.persistNote(synced);
   }
 
   async recordShareHistory(noteId: string, share: ShareRecord): Promise<void> {
@@ -256,25 +395,42 @@ export class LocalNoteRepository {
     );
   }
 
-  private async persistNote(note: NoteRecord, preview: string): Promise<void> {
+  private async listRows(): Promise<SqliteNoteRow[]> {
     if (Platform.OS === "web") {
-      const row = mapNoteRecordToRow(note, preview);
-      const index = this.webState.notes.findIndex((candidate) => candidate.id === note.id);
-      if (index >= 0) {
-        this.webState.notes[index] = row;
-      } else {
-        this.webState.notes.unshift(row);
-      }
+      return [...this.webState.notes].sort((left, right) => right.updated_at.localeCompare(left.updated_at));
+    }
+
+    return this.getDatabase().getAllAsync<SqliteNoteRow>(
+      "SELECT * FROM notes ORDER BY updated_at DESC"
+    );
+  }
+
+  private async decryptPreview(note: NoteRecord, secret?: string): Promise<string> {
+    if (!secret) {
+      return "";
+    }
+
+    try {
+      const content = await decryptNoteContent(note.encryptedContent, secret);
+      return content;
+    } catch {
+      return "Unable to decrypt on this device.";
+    }
+  }
+
+  private async persistNote(note: NoteRecord): Promise<void> {
+    if (Platform.OS === "web") {
+      this.webState = upsertWebNoteState(this.webState, note);
       writeWebState(this.webState);
       return;
     }
 
     await this.getDatabase().runAsync(
       `INSERT OR REPLACE INTO notes (
-        id, owner_id, title, format, status, sync_state, preview,
+        id, owner_id, title, format, status, sync_state, sync_enabled, preview,
         cipher_text, iv, salt, algorithm, encryption_version,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         note.id,
         note.ownerId,
@@ -282,7 +438,8 @@ export class LocalNoteRepository {
         note.format,
         note.status,
         note.syncState,
-        preview,
+        note.syncEnabled ? 1 : 0,
+        "",
         note.encryptedContent.cipherText,
         note.encryptedContent.iv,
         note.encryptedContent.salt,
@@ -296,16 +453,7 @@ export class LocalNoteRepository {
 
   private async persistVersion(note: NoteRecord): Promise<void> {
     if (Platform.OS === "web") {
-      this.webState.noteVersions.unshift({
-        id: createLocalId("note-version"),
-        noteId: note.id,
-        cipherText: note.encryptedContent.cipherText,
-        iv: note.encryptedContent.iv,
-        salt: note.encryptedContent.salt,
-        algorithm: note.encryptedContent.algorithm,
-        encryptionVersion: note.encryptedContent.version,
-        createdAt: new Date().toISOString()
-      });
+      this.webState = appendWebNoteVersion(this.webState, note);
       writeWebState(this.webState);
       return;
     }
@@ -329,25 +477,19 @@ export class LocalNoteRepository {
 
   private async enqueueSync(
     entityId: string,
-    operation: "create-note" | "update-note",
+    operation: "upsert-note" | "delete-note",
     payload: NoteRecord
   ): Promise<void> {
     const payloadJson = JSON.stringify({
       id: payload.id,
       title: payload.title,
       format: payload.format,
-      updatedAt: payload.updatedAt
+      updatedAt: payload.updatedAt,
+      status: payload.status
     });
 
     if (Platform.OS === "web") {
-      this.webState.pendingSyncQueue.unshift({
-        id: createLocalId("sync"),
-        entityType: "note",
-        entityId,
-        operation,
-        payloadJson,
-        createdAt: new Date().toISOString()
-      });
+      this.webState = enqueueWebSyncState(this.webState, entityId, operation, payloadJson);
       writeWebState(this.webState);
       return;
     }
@@ -376,25 +518,6 @@ export class LocalNoteRepository {
   }
 }
 
-function mapNoteRecordToRow(note: NoteRecord, preview: string): SqliteNoteRow {
-  return {
-    id: note.id,
-    owner_id: note.ownerId,
-    title: note.title,
-    format: note.format,
-    status: note.status,
-    sync_state: note.syncState,
-    preview,
-    cipher_text: note.encryptedContent.cipherText,
-    iv: note.encryptedContent.iv,
-    salt: note.encryptedContent.salt,
-    algorithm: note.encryptedContent.algorithm,
-    encryption_version: note.encryptedContent.version,
-    created_at: note.createdAt,
-    updated_at: note.updatedAt
-  };
-}
-
 function mapRowToNoteRecord(row: SqliteNoteRow): NoteRecord {
   return {
     id: row.id,
@@ -403,6 +526,7 @@ function mapRowToNoteRecord(row: SqliteNoteRow): NoteRecord {
     format: row.format,
     status: row.status,
     syncState: row.sync_state,
+    syncEnabled: row.sync_enabled === 1,
     encryptedContent: {
       cipherText: row.cipher_text,
       iv: row.iv,
@@ -415,10 +539,6 @@ function mapRowToNoteRecord(row: SqliteNoteRow): NoteRecord {
   };
 }
 
-function buildPreview(content: string): string {
-  return content.replace(/\s+/g, " ").trim().slice(0, 180);
-}
-
 function readWebState(): WebLocalState {
   try {
     if (typeof window === "undefined" || !window.localStorage) {
@@ -426,7 +546,7 @@ function readWebState(): WebLocalState {
     }
 
     const stored = window.localStorage.getItem(WEB_STORAGE_KEY);
-    return stored ? (JSON.parse(stored) as WebLocalState) : createEmptyWebState();
+    return stored ? migrateWebState(JSON.parse(stored) as Partial<WebLocalState>) : createEmptyWebState();
   } catch {
     return createEmptyWebState();
   }
@@ -441,5 +561,18 @@ function writeWebState(state: WebLocalState): void {
     window.localStorage.setItem(WEB_STORAGE_KEY, JSON.stringify(state));
   } catch {
     // Web persistence remains best-effort.
+  }
+}
+
+async function ensureColumn(
+  database: SQLite.SQLiteDatabase,
+  table: string,
+  column: string,
+  definition: string
+): Promise<void> {
+  try {
+    await database.execAsync(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
+  } catch {
+    // Column already exists or database is locked during a previous migration attempt.
   }
 }

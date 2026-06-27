@@ -12,11 +12,20 @@ import type {
 } from "@notesync/shared-types";
 import { getPrismaClient } from "../lib/prisma";
 import { createId, createSlug } from "../lib/id";
-import type { AppStore, ShareLookupRecord, StoredUser } from "./store";
+import type {
+  AppStore,
+  RefreshSessionRecord,
+  ShareLookupRecord,
+  StoredUser
+} from "./store";
 
 export class PrismaStore implements AppStore {
   readonly provider = "prisma" as const;
   private readonly prisma = getPrismaClient();
+
+  async healthcheck(): Promise<void> {
+    await this.prisma.$queryRaw`SELECT 1`;
+  }
 
   async createUser(input: Omit<StoredUser, "id" | "createdAt">): Promise<UserProfile> {
     const user = await this.prisma.user.create({
@@ -47,15 +56,54 @@ export class PrismaStore implements AppStore {
     return user ? mapUserProfile(user) : undefined;
   }
 
+  async createRefreshSession(input: {
+    id: string;
+    userId: string;
+    refreshTokenHash: string;
+    expiresAt: string;
+  }): Promise<RefreshSessionRecord> {
+    const session = await this.prisma.refreshSession.create({
+      data: {
+        id: input.id,
+        userId: input.userId,
+        refreshToken: input.refreshTokenHash,
+        expiresAt: new Date(input.expiresAt)
+      }
+    });
+
+    return mapRefreshSession(session);
+  }
+
+  async getRefreshSession(sessionId: string): Promise<RefreshSessionRecord | undefined> {
+    const session = await this.prisma.refreshSession.findUnique({
+      where: { id: sessionId }
+    });
+
+    return session ? mapRefreshSession(session) : undefined;
+  }
+
+  async revokeRefreshSession(sessionId: string): Promise<void> {
+    await this.prisma.refreshSession.updateMany({
+      where: {
+        id: sessionId,
+        revokedAt: null
+      },
+      data: {
+        revokedAt: new Date()
+      }
+    });
+  }
+
   async createNote(ownerId: string, input: CreateNoteInput): Promise<NoteRecord> {
     const note = await this.prisma.noteMetadata.create({
       data: {
-        id: createId(),
+        id: input.id ?? createId(),
         ownerId,
         title: input.title,
         format: input.format,
         status: "active",
-        syncState: "local-only",
+        syncState: input.syncEnabled ? "synced" : "local-only",
+        syncEnabled: Boolean(input.syncEnabled),
         encryptedContent: input.encryptedContent as unknown as Prisma.InputJsonValue
       }
     });
@@ -85,12 +133,24 @@ export class PrismaStore implements AppStore {
         title: input.title ?? existing.title,
         format: input.format ?? existing.format,
         status: input.status ?? existing.status,
-        syncState: "pending-sync",
+        syncState: input.syncEnabled ? "synced" : "pending-sync",
+        syncEnabled: input.syncEnabled ?? existing.syncEnabled,
         encryptedContent: (input.encryptedContent ?? existing.encryptedContent) as Prisma.InputJsonValue
       }
     });
 
     return mapNoteRecord(note);
+  }
+
+  async deleteNote(noteId: string, ownerId: string): Promise<boolean> {
+    const deleted = await this.prisma.noteMetadata.deleteMany({
+      where: {
+        id: noteId,
+        ownerId
+      }
+    });
+
+    return deleted.count > 0;
   }
 
   async listNotes(ownerId: string): Promise<NoteRecord[]> {
@@ -222,6 +282,7 @@ function mapNoteRecord(note: {
   format: string;
   status: string;
   syncState: string;
+  syncEnabled: boolean;
   encryptedContent: Prisma.JsonValue;
   createdAt: Date;
   updatedAt: Date;
@@ -233,6 +294,7 @@ function mapNoteRecord(note: {
     format: note.format as NoteRecord["format"],
     status: note.status as NoteRecord["status"],
     syncState: note.syncState as NoteRecord["syncState"],
+    syncEnabled: note.syncEnabled,
     encryptedContent: note.encryptedContent as unknown as EncryptedNoteContent,
     createdAt: note.createdAt.toISOString(),
     updatedAt: note.updatedAt.toISOString()
@@ -285,5 +347,23 @@ function mapShareLookupRecord(share: {
   return {
     ...mapShareRecord(share),
     passwordHash: share.passwordHash ?? undefined
+  };
+}
+
+function mapRefreshSession(session: {
+  id: string;
+  userId: string;
+  refreshToken: string;
+  createdAt: Date;
+  expiresAt: Date;
+  revokedAt: Date | null;
+}): RefreshSessionRecord {
+  return {
+    id: session.id,
+    userId: session.userId,
+    refreshTokenHash: session.refreshToken,
+    createdAt: session.createdAt.toISOString(),
+    expiresAt: session.expiresAt.toISOString(),
+    revokedAt: session.revokedAt?.toISOString()
   };
 }

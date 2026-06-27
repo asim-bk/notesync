@@ -1,4 +1,17 @@
 {
-  "compilerOptions": {},
-  "extends": "expo/tsconfig.base"
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "baseUrl": "../..",
+    "paths": {
+      "@notesync/shared-types": [
+        "packages/shared-types/src"
+      ],
+      "@notesync/note-domain": [
+        "packages/note-domain/src"
+      ],
+      "@notesync/crypto-core": [
+        "packages/crypto-core/src"
+      ]
+    }
+  }
 }

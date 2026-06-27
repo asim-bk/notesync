@@ -15,6 +15,7 @@ CREATE TABLE `notes_metadata` (
   `format` VARCHAR(191) NOT NULL,
   `status` VARCHAR(191) NOT NULL,
   `sync_state` VARCHAR(191) NOT NULL,
+  `sync_enabled` BOOLEAN NOT NULL DEFAULT false,
   `encrypted_content` JSON NOT NULL,
   `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `updated_at` DATETIME(3) NOT NULL,
