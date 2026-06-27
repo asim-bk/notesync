@@ -18,9 +18,22 @@ let seeded = false;
 export type ScreenState = "list" | "editor" | "share";
 
 export function useNotesApp() {
-  const [screen, setScreen] = useState<ScreenState>("list");
-  const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
-  const [draft, setDraft] = useState<NoteDraft>(() => seedInitialDraft());
+  ensureSeededNote();
+  const initialNoteId = repository.listSummaries()[0]?.id ?? null;
+  const initialStoredNote = initialNoteId ? repository.getById(initialNoteId) : undefined;
+  const [screen, setScreen] = useState<ScreenState>(initialNoteId ? "editor" : "list");
+  const [activeNoteId, setActiveNoteId] = useState<string | null>(initialNoteId);
+  const [draft, setDraft] = useState<NoteDraft>(() => {
+    if (!initialStoredNote) {
+      return createEmptyDraft();
+    }
+
+    return {
+      title: initialStoredNote.note.title,
+      content: initialStoredNote.decryptedContent,
+      format: initialStoredNote.note.format
+    };
+  });
   const [sharePreview, setSharePreview] = useState<ShareRecord | null>(null);
   const [sharePassword, setSharePassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -31,6 +44,8 @@ export function useNotesApp() {
   function startNewNote(format: NoteFormat = "markdown") {
     setActiveNoteId(null);
     setDraft(createEmptyDraft(format));
+    setSharePreview(null);
+    setSharePassword("");
     setScreen("editor");
   }
 
@@ -46,6 +61,7 @@ export function useNotesApp() {
       content: stored.decryptedContent,
       format: stored.note.format
     });
+    setSharePreview(null);
     setScreen("editor");
   }
 
@@ -59,7 +75,8 @@ export function useNotesApp() {
         const created = repository.saveDraft(OWNER_ID, draft, encrypted);
         setActiveNoteId(created.id);
       }
-      setScreen("list");
+      setSharePreview(null);
+      setScreen("editor");
     } finally {
       setLoading(false);
     }
@@ -105,6 +122,12 @@ export function useNotesApp() {
     setScreen("share");
   }
 
+  function openSharePreview() {
+    if (activeNoteId) {
+      void createShare();
+    }
+  }
+
   return {
     screen,
     draft,
@@ -119,11 +142,12 @@ export function useNotesApp() {
     startNewNote,
     editNote,
     saveNote,
-    createShare
+    createShare,
+    openSharePreview
   };
 }
 
-function seedInitialDraft(): NoteDraft {
+function ensureSeededNote() {
   if (!seeded) {
     seeded = true;
     repository.saveDraft(
@@ -137,6 +161,4 @@ function seedInitialDraft(): NoteDraft {
       buildEncryptedSeed()
     );
   }
-
-  return createEmptyDraft();
 }

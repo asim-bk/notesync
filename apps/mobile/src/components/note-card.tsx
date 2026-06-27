@@ -4,19 +4,24 @@ import { colors } from "../theme";
 
 export function NoteCard(props: {
   note: NoteSummary;
+  selected?: boolean;
   onPress(): void;
 }) {
-  const { note, onPress } = props;
+  const { note, onPress, selected } = props;
 
   return (
-    <Pressable onPress={onPress} style={styles.card}>
+    <Pressable onPress={onPress} style={[styles.card, selected ? styles.cardSelected : null]}>
       <View style={styles.row}>
-        <Text style={styles.title}>{note.title}</Text>
+        <Text numberOfLines={1} style={styles.title}>
+          {note.title}
+        </Text>
         <Text style={styles.badge}>{note.format.toUpperCase()}</Text>
       </View>
-      <Text style={styles.excerpt}>{note.excerpt || "No preview available yet."}</Text>
+      <Text numberOfLines={2} style={styles.excerpt}>
+        {note.excerpt || "No preview available yet."}
+      </Text>
       <View style={styles.row}>
-        <Text style={styles.meta}>{note.syncState}</Text>
+        <Text style={styles.meta}>{note.syncState.replace("-", " ")}</Text>
         <Text style={styles.meta}>{new Date(note.updatedAt).toLocaleDateString()}</Text>
       </View>
     </Pressable>
@@ -25,12 +30,16 @@ export function NoteCard(props: {
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: colors.panel,
-    borderColor: colors.border,
+    backgroundColor: colors.paper,
+    borderColor: "#d7ceb8",
     borderRadius: 8,
     borderWidth: 1,
     gap: 10,
     padding: 16
+  },
+  cardSelected: {
+    borderColor: colors.primaryStrong,
+    backgroundColor: colors.paperMuted
   },
   row: {
     alignItems: "center",
@@ -38,24 +47,25 @@ const styles = StyleSheet.create({
     justifyContent: "space-between"
   },
   title: {
-    color: colors.text,
+    color: colors.ink,
     flex: 1,
     fontSize: 16,
     fontWeight: "700",
     marginRight: 12
   },
   badge: {
-    color: colors.primaryAlt,
+    color: colors.inkSoft,
+    flexShrink: 0,
     fontSize: 12,
     fontWeight: "700"
   },
   excerpt: {
-    color: colors.textMuted,
+    color: colors.inkSoft,
     fontSize: 14,
     lineHeight: 20
   },
   meta: {
-    color: colors.textMuted,
+    color: colors.inkSoft,
     fontSize: 12
   }
 });
