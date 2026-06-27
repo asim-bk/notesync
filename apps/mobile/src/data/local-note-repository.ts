@@ -1,4 +1,3 @@
-import * as SQLite from "expo-sqlite";
 import { Platform } from "react-native";
 import type {
   EncryptedNoteContent,
@@ -23,12 +22,20 @@ import {
   type WebLocalState,
   WEB_STORAGE_KEY
 } from "./local-note-web-state";
+import { openNativeDatabaseAsync } from "./sqlite-adapter";
 
 const DATABASE_NAME = "notesync.db";
 
+interface SQLiteDatabaseLike {
+  execAsync(sql: string): Promise<void>;
+  runAsync(sql: string, params?: unknown[]): Promise<unknown>;
+  getAllAsync<T>(sql: string, params?: unknown[]): Promise<T[]>;
+  getFirstAsync<T>(sql: string, params?: unknown[]): Promise<T | null>;
+}
+
 export class LocalNoteRepository {
   private initialized = false;
-  private database: SQLite.SQLiteDatabase | null = null;
+  private database: SQLiteDatabaseLike | null = null;
   private webState: WebLocalState = createEmptyWebState();
 
   async initialize(): Promise<void> {
@@ -42,7 +49,7 @@ export class LocalNoteRepository {
       return;
     }
 
-    this.database = await SQLite.openDatabaseAsync(DATABASE_NAME);
+    this.database = await openNativeDatabaseAsync(DATABASE_NAME);
     await this.database.execAsync(`
       PRAGMA journal_mode = WAL;
 
@@ -509,7 +516,7 @@ export class LocalNoteRepository {
     );
   }
 
-  private getDatabase(): SQLite.SQLiteDatabase {
+  private getDatabase(): SQLiteDatabaseLike {
     if (!this.database) {
       throw new Error("Local SQLite database has not been initialized.");
     }
@@ -565,7 +572,7 @@ function writeWebState(state: WebLocalState): void {
 }
 
 async function ensureColumn(
-  database: SQLite.SQLiteDatabase,
+  database: SQLiteDatabaseLike,
   table: string,
   column: string,
   definition: string

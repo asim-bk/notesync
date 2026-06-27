@@ -1,8 +1,6 @@
 import * as FileSystem from "expo-file-system";
 import * as Sharing from "expo-sharing";
 import { convertNoteContent, formatNoteForPreview } from "@notesync/note-domain";
-import { Document, Packer, Paragraph, TextRun } from "docx";
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { Platform } from "react-native";
 import type { NoteFormat } from "@notesync/shared-types";
 
@@ -63,6 +61,7 @@ function serializeTextExport(payload: ExportPayload, target: "markdown" | "html"
 }
 
 async function buildPdf(payload: ExportPayload): Promise<Uint8Array> {
+  const { PDFDocument, StandardFonts, rgb } = loadPdfLib();
   const pdf = await PDFDocument.create();
   const page = pdf.addPage([595, 842]);
   const font = await pdf.embedFont(StandardFonts.Helvetica);
@@ -107,6 +106,7 @@ async function buildPdf(payload: ExportPayload): Promise<Uint8Array> {
 }
 
 async function buildDocx(payload: ExportPayload): Promise<Uint8Array> {
+  const { Document, Packer, Paragraph, TextRun } = loadDocx();
   const markdown = convertNoteContent(payload.content, payload.format, "markdown");
   const paragraphs = markdown.split(/\n{2,}/).map((block) => {
     return new Paragraph({
@@ -134,6 +134,14 @@ async function buildDocx(payload: ExportPayload): Promise<Uint8Array> {
   });
 
   return new Uint8Array(await Packer.toArrayBuffer(document));
+}
+
+function loadPdfLib(): typeof import("pdf-lib") {
+  return require("pdf-lib/cjs") as typeof import("pdf-lib");
+}
+
+function loadDocx(): typeof import("docx") {
+  return require("docx") as typeof import("docx");
 }
 
 async function saveTextFile(filename: string, mimeType: string, content: string): Promise<void> {
