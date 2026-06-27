@@ -1,8 +1,14 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import * as Clipboard from "expo-clipboard";
 import {
   ActivityIndicator,
+  Animated,
+  Easing,
+  Modal,
+  Platform,
   Pressable,
   SafeAreaView,
+  Share as NativeShare,
   ScrollView,
   StyleSheet,
   Text,
@@ -10,7 +16,7 @@ import {
   View,
   useWindowDimensions
 } from "react-native";
-import type { NoteSummary } from "@notesync/shared-types";
+import type { NoteSummary, ShareCreationResult } from "@notesync/shared-types";
 import { NoteCard } from "./components/note-card";
 import { useNotesApp } from "./hooks/use-notes-app";
 import { colors } from "./theme";
@@ -25,6 +31,7 @@ type MobileHeaderAction = {
   onPress(): void;
 } | null;
 type DrawerItemKey = "notes" | "new" | "shared" | "synced" | "settings";
+type ShareDialogStep = "protect" | "password" | "result" | null;
 
 export default function App() {
   const app = useNotesApp();
@@ -33,9 +40,20 @@ export default function App() {
   const isTablet = width >= 860;
   const isMobile = !isTablet;
 
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const drawerWidth = Math.min(width * 0.84, 308);
+  const drawerTranslate = useRef(new Animated.Value(-drawerWidth - 28)).current;
+  const drawerBackdropOpacity = useRef(new Animated.Value(0)).current;
+  const [mobileMenuVisible, setMobileMenuVisible] = useState(false);
   const [mobileListMode, setMobileListMode] = useState<MobileListMode>("all");
   const [mobileOverlayScreen, setMobileOverlayScreen] = useState<MobileOverlayScreen>(null);
+  const [shareTargetNoteId, setShareTargetNoteId] = useState<string | null>(null);
+  const [sharedComposerNoteId, setSharedComposerNoteId] = useState<string | null>(null);
+  const [shareDialogStep, setShareDialogStep] = useState<ShareDialogStep>(null);
+  const [shareDialogPassword, setShareDialogPassword] = useState("");
+  const [shareDialogError, setShareDialogError] = useState<string | null>(null);
+  const [shareResult, setShareResult] = useState<ShareCreationResult | null>(null);
+  const [copiedShareUrl, setCopiedShareUrl] = useState<string | null>(null);
+  const [deleteTargetNoteId, setDeleteTargetNoteId] = useState<string | null>(null);
 
   const noteCount = app.summaries.length;
   const syncedSummaries = useMemo(() => {
@@ -44,52 +62,117 @@ export default function App() {
   const activeSummary = app.summaries.find((note) => note.id === app.activeStoredNote?.note.id) ?? null;
   const visibleMobileSummaries = mobileListMode === "synced" ? syncedSummaries : app.summaries;
 
+  useEffect(() => {
+    if (!sharedComposerNoteId || !app.summaries.some((note) => note.id === sharedComposerNoteId)) {
+      setSharedComposerNoteId(app.activeStoredNote?.note.id ?? app.summaries[0]?.id ?? null);
+    }
+  }, [app.activeStoredNote?.note.id, app.summaries, sharedComposerNoteId]);
+
+  useEffect(() => {
+    if (!isMobile) {
+      setMobileMenuVisible(false);
+      drawerTranslate.setValue(-drawerWidth - 28);
+      drawerBackdropOpacity.setValue(0);
+    }
+  }, [drawerBackdropOpacity, drawerTranslate, drawerWidth, isMobile]);
+
+  const showMobileMenu = () => {
+    if (mobileMenuVisible) {
+      return;
+    }
+
+    setMobileMenuVisible(true);
+    drawerTranslate.setValue(-drawerWidth - 28);
+    drawerBackdropOpacity.setValue(0);
+    requestAnimationFrame(() => {
+      Animated.parallel([
+        Animated.timing(drawerTranslate, {
+          toValue: 0,
+          duration: 240,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true
+        }),
+        Animated.timing(drawerBackdropOpacity, {
+          toValue: 1,
+          duration: 240,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true
+        })
+      ]).start();
+    });
+  };
+
+  const hideMobileMenu = () => {
+    if (!mobileMenuVisible) {
+      return;
+    }
+
+    Animated.parallel([
+      Animated.timing(drawerTranslate, {
+        toValue: -drawerWidth - 28,
+        duration: 210,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true
+      }),
+      Animated.timing(drawerBackdropOpacity, {
+        toValue: 0,
+        duration: 210,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true
+      })
+    ]).start(({ finished }) => {
+      if (finished) {
+        setMobileMenuVisible(false);
+      }
+    });
+  };
+
   const resetMobileHome = () => {
-    setMobileMenuOpen(false);
+    hideMobileMenu();
     setMobileOverlayScreen(null);
     setMobileListMode("all");
     app.setScreen("list");
   };
 
   const openMobileNotes = () => {
-    setMobileMenuOpen(false);
+    hideMobileMenu();
     setMobileOverlayScreen(null);
     setMobileListMode("all");
     app.setScreen("list");
   };
 
   const openMobileSyncedNotes = () => {
-    setMobileMenuOpen(false);
+    hideMobileMenu();
     setMobileOverlayScreen(null);
     setMobileListMode("synced");
     app.setScreen("list");
   };
 
   const openMobileShare = () => {
-    setMobileMenuOpen(false);
+    hideMobileMenu();
     setMobileOverlayScreen(null);
     app.setScreen("share");
   };
 
   const openMobileSettings = () => {
-    setMobileMenuOpen(false);
+    hideMobileMenu();
     setMobileOverlayScreen("settings");
   };
 
   const openMobileAuth = () => {
-    setMobileMenuOpen(false);
+    hideMobileMenu();
     app.setAuthMode("login");
     setMobileOverlayScreen("auth");
   };
 
   const handleNewNote = () => {
-    setMobileMenuOpen(false);
+    hideMobileMenu();
     setMobileOverlayScreen(null);
     app.startNewNote();
   };
 
   const handleEditNote = async (noteId: string) => {
-    setMobileMenuOpen(false);
+    hideMobileMenu();
     setMobileOverlayScreen(null);
     await app.editNote(noteId);
   };
@@ -101,7 +184,7 @@ export default function App() {
       return;
     }
 
-    setMobileMenuOpen(false);
+    hideMobileMenu();
 
     if (authMode === "login") {
       setMobileOverlayScreen("syncing");
@@ -115,11 +198,97 @@ export default function App() {
   };
 
   const handleSignOut = async () => {
-    setMobileMenuOpen(false);
+    hideMobileMenu();
     setMobileOverlayScreen(null);
     setMobileListMode("all");
     app.setScreen("list");
     await app.signOut();
+  };
+
+  const beginShareFlow = (noteId: string) => {
+    setShareTargetNoteId(noteId);
+    setShareDialogPassword("");
+    setShareDialogError(null);
+    setShareResult(null);
+    setCopiedShareUrl(null);
+    setShareDialogStep("protect");
+  };
+
+  const closeShareFlow = () => {
+    setShareDialogStep(null);
+    setShareDialogPassword("");
+    setShareDialogError(null);
+    setShareResult(null);
+    setCopiedShareUrl(null);
+  };
+
+  const completeShareCreation = async (password?: string) => {
+    if (!shareTargetNoteId) {
+      return;
+    }
+
+    const createdShare = await app.createShareForNote(shareTargetNoteId, password);
+    if (createdShare) {
+      setShareResult(createdShare);
+      setShareDialogPassword("");
+      setShareDialogError(null);
+      setCopiedShareUrl(null);
+      setShareDialogStep("result");
+    }
+  };
+
+  const handleProtectedShare = async () => {
+    if (!shareDialogPassword.trim()) {
+      setShareDialogError("Enter a password before continuing.");
+      return;
+    }
+
+    await completeShareCreation(shareDialogPassword);
+  };
+
+  const handleCopyShareLink = async (url: string) => {
+    await Clipboard.setStringAsync(url);
+    setCopiedShareUrl(url);
+  };
+
+  const handleShareLink = async (url: string) => {
+    try {
+      if (Platform.OS === "web" && typeof navigator !== "undefined" && "share" in navigator) {
+        await navigator.share({
+          title: "NoteSync share",
+          text: url,
+          url
+        });
+        return;
+      }
+
+      await NativeShare.share({
+        title: "NoteSync share",
+        message: url,
+        url
+      });
+    } catch {
+      await handleCopyShareLink(url);
+    }
+  };
+
+  const handleDeleteCurrentNote = () => {
+    if (!app.activeStoredNote?.note.id) {
+      return;
+    }
+
+    setDeleteTargetNoteId(app.activeStoredNote.note.id);
+  };
+
+  const confirmDeleteNote = async () => {
+    if (!deleteTargetNoteId) {
+      return;
+    }
+
+    const deleted = await app.deleteNote(deleteTargetNoteId);
+    if (deleted) {
+      setDeleteTargetNoteId(null);
+    }
   };
 
   const mobileHeader = getMobileHeaderState({
@@ -169,7 +338,7 @@ export default function App() {
           renderMobileHeader({
             title: mobileHeader.title,
             meta: mobileHeader.meta,
-            onMenuPress: () => setMobileMenuOpen(true),
+            onMenuPress: showMobileMenu,
             secondaryAction: mobileHeader.secondaryAction
           })
         ) : (
@@ -216,9 +385,25 @@ export default function App() {
                   : mobileOverlayScreen === "settings"
                     ? renderSettingsScreen(app, noteCount, syncedSummaries.length)
                     : app.screen === "editor"
-                      ? renderEditor(app, activeSummary, isTablet)
+                      ? renderEditor(app, activeSummary, isTablet, {
+                          onDelete: handleDeleteCurrentNote,
+                          onShare: () => {
+                            if (app.activeStoredNote?.note.id) {
+                              beginShareFlow(app.activeStoredNote.note.id);
+                            }
+                          }
+                        })
                       : app.screen === "share"
-                        ? renderShareHub(app)
+                        ? renderShareHub(app, {
+                            selectedNoteId: sharedComposerNoteId,
+                            onSelectNote: setSharedComposerNoteId,
+                            onCreateShare: () => {
+                              if (sharedComposerNoteId) {
+                                beginShareFlow(sharedComposerNoteId);
+                              }
+                            },
+                            onCopyLink: handleCopyShareLink
+                          })
                         : renderMobileNotesHome({
                             app,
                             summaries: visibleMobileSummaries,
@@ -235,7 +420,16 @@ export default function App() {
               <View style={[styles.sidebar, isDesktop ? { width: SIDEBAR_WIDTH } : null]}>
                 {renderSidebar(app, noteCount)}
               </View>
-              <View style={styles.editorSurface}>{renderEditor(app, activeSummary, isTablet)}</View>
+              <View style={styles.editorSurface}>
+                {renderEditor(app, activeSummary, isTablet, {
+                  onDelete: handleDeleteCurrentNote,
+                  onShare: () => {
+                    if (app.activeStoredNote?.note.id) {
+                      beginShareFlow(app.activeStoredNote.note.id);
+                    }
+                  }
+                })}
+              </View>
               <View style={[styles.inspector, isDesktop ? { width: INSPECTOR_WIDTH } : null]}>
                 {renderInspector(app)}
               </View>
@@ -249,15 +443,19 @@ export default function App() {
           </Pressable>
         ) : null}
 
-        {isMobile && mobileMenuOpen ? (
+        {mobileMenuVisible ? (
           <View style={styles.mobileDrawerLayer}>
-            <Pressable onPress={() => setMobileMenuOpen(false)} style={styles.mobileDrawerBackdrop} />
+            <Animated.View style={[styles.mobileDrawerBackdrop, { opacity: drawerBackdropOpacity }]}>
+              <Pressable onPress={hideMobileMenu} style={styles.backdropPressable} />
+            </Animated.View>
             {renderMobileDrawer({
               app,
+              drawerWidth,
+              drawerTranslate,
               noteCount,
               syncedCount: syncedSummaries.length,
               activeItem: activeDrawerItem,
-              onClose: () => setMobileMenuOpen(false),
+              onClose: hideMobileMenu,
               onOpenNotes: openMobileNotes,
               onOpenNewNote: handleNewNote,
               onOpenShared: openMobileShare,
@@ -268,6 +466,114 @@ export default function App() {
             })}
           </View>
         ) : null}
+
+        <Modal animationType="fade" onRequestClose={closeShareFlow} transparent visible={shareDialogStep !== null}>
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modalCard}>
+              {shareDialogStep === "protect" ? (
+                <>
+                  <Text style={styles.modalTitle}>Protect this share with a password?</Text>
+                  <Text style={styles.modalCopy}>
+                    Choose whether the recipient should enter a password before opening this note.
+                  </Text>
+                  <View style={styles.modalActionColumn}>
+                    <Pressable onPress={() => setShareDialogStep("password")} style={styles.accentButton}>
+                      <Text style={styles.primaryButtonText}>Yes, protect it</Text>
+                    </Pressable>
+                    <Pressable onPress={() => void completeShareCreation("")} style={styles.secondaryButtonCompact}>
+                      <Text style={styles.secondaryButtonText}>No, continue</Text>
+                    </Pressable>
+                    <Pressable onPress={closeShareFlow} style={styles.ghostButton}>
+                      <Text style={styles.ghostButtonText}>Cancel</Text>
+                    </Pressable>
+                  </View>
+                </>
+              ) : null}
+
+              {shareDialogStep === "password" ? (
+                <>
+                  <Text style={styles.modalTitle}>Enter a share password</Text>
+                  <Text style={styles.modalCopy}>
+                    This password will be required when the shared note is opened.
+                  </Text>
+                  <TextInput
+                    onChangeText={(value) => {
+                      setShareDialogPassword(value);
+                      if (shareDialogError) {
+                        setShareDialogError(null);
+                      }
+                    }}
+                    placeholder="Share password"
+                    placeholderTextColor={colors.textSoft}
+                    secureTextEntry
+                    style={styles.inlineInput}
+                    value={shareDialogPassword}
+                  />
+                  {shareDialogError ? <Text style={styles.modalErrorText}>{shareDialogError}</Text> : null}
+                  <View style={styles.modalActionColumn}>
+                    <Pressable disabled={app.loading} onPress={() => void handleProtectedShare()} style={styles.accentButton}>
+                      <Text style={styles.primaryButtonText}>{app.loading ? "Creating..." : "Create share"}</Text>
+                    </Pressable>
+                    <Pressable onPress={() => setShareDialogStep("protect")} style={styles.secondaryButtonCompact}>
+                      <Text style={styles.secondaryButtonText}>Back</Text>
+                    </Pressable>
+                  </View>
+                </>
+              ) : null}
+
+              {shareDialogStep === "result" && shareResult ? (
+                <>
+                  <Text style={styles.modalTitle}>Share link ready</Text>
+                  <Text style={styles.modalCopy}>
+                    Send this link directly or open the platform share sheet.
+                  </Text>
+                  <View style={styles.shareResultLinkCard}>
+                    <Text numberOfLines={2} style={styles.shareResultLinkText}>
+                      {shareResult.url}
+                    </Text>
+                  </View>
+                  <View style={styles.modalActionColumn}>
+                    <Pressable onPress={() => void handleCopyShareLink(shareResult.url)} style={styles.accentButton}>
+                      <Text style={styles.primaryButtonText}>
+                        {copiedShareUrl === shareResult.url ? "Copied" : "Copy link"}
+                      </Text>
+                    </Pressable>
+                    <Pressable onPress={() => void handleShareLink(shareResult.url)} style={styles.secondaryButtonCompact}>
+                      <Text style={styles.secondaryButtonText}>Share to apps</Text>
+                    </Pressable>
+                    <Pressable onPress={closeShareFlow} style={styles.ghostButton}>
+                      <Text style={styles.ghostButtonText}>Done</Text>
+                    </Pressable>
+                  </View>
+                </>
+              ) : null}
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
+          animationType="fade"
+          onRequestClose={() => setDeleteTargetNoteId(null)}
+          transparent
+          visible={deleteTargetNoteId !== null}
+        >
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>Delete this note?</Text>
+              <Text style={styles.modalCopy}>
+                This removes the local note immediately and queues a remote delete if sync was enabled.
+              </Text>
+              <View style={styles.modalActionColumn}>
+                <Pressable disabled={app.loading} onPress={() => void confirmDeleteNote()} style={styles.destructiveButton}>
+                  <Text style={styles.destructiveButtonText}>{app.loading ? "Deleting..." : "Delete note"}</Text>
+                </Pressable>
+                <Pressable onPress={() => setDeleteTargetNoteId(null)} style={styles.secondaryButtonCompact}>
+                  <Text style={styles.secondaryButtonText}>Cancel</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
       </View>
     </SafeAreaView>
   );
@@ -365,7 +671,11 @@ function renderMobileHeader(props: {
   return (
     <View style={styles.mobileHeader}>
       <Pressable onPress={props.onMenuPress} style={styles.headerMenuButton}>
-        <Text style={styles.headerMenuButtonText}>Menu</Text>
+        <View style={styles.headerMenuIcon}>
+          <View style={styles.headerMenuLine} />
+          <View style={styles.headerMenuLine} />
+          <View style={styles.headerMenuLine} />
+        </View>
       </Pressable>
 
       <View style={styles.mobileHeaderBody}>
@@ -390,6 +700,8 @@ function renderMobileHeader(props: {
 
 function renderMobileDrawer(props: {
   app: ReturnType<typeof useNotesApp>;
+  drawerWidth: number;
+  drawerTranslate: Animated.Value;
   noteCount: number;
   syncedCount: number;
   activeItem: DrawerItemKey;
@@ -403,7 +715,15 @@ function renderMobileDrawer(props: {
   onSignOut(): Promise<void>;
 }) {
   return (
-    <View style={styles.mobileDrawer}>
+    <Animated.View
+      style={[
+        styles.mobileDrawer,
+        {
+          transform: [{ translateX: props.drawerTranslate }],
+          width: props.drawerWidth
+        }
+      ]}
+    >
       <View style={styles.mobileDrawerContent}>
         <View style={styles.mobileDrawerTop}>
           <View>
@@ -483,7 +803,7 @@ function renderMobileDrawer(props: {
           </View>
         </View>
       </View>
-    </View>
+    </Animated.View>
   );
 }
 
@@ -617,12 +937,101 @@ function renderSyncingScreen(app: ReturnType<typeof useNotesApp>) {
   );
 }
 
-function renderShareHub(app: ReturnType<typeof useNotesApp>) {
+function renderShareHub(
+  app: ReturnType<typeof useNotesApp>,
+  props: {
+    selectedNoteId: string | null;
+    onSelectNote(noteId: string): void;
+    onCreateShare(): void;
+    onCopyLink(url: string): Promise<void>;
+  }
+) {
+  const selectedSummary = app.summaries.find((note) => note.id === props.selectedNoteId) ?? null;
+
   return (
     <ScrollView contentContainerStyle={styles.mobileSurfaceScroll} showsVerticalScrollIndicator={false}>
-      {renderShareCreateSection(app)}
+      <View style={styles.inspectorSection}>
+        <Text style={styles.sectionTitle}>Create share</Text>
+        <Text style={styles.panelCopy}>
+          Pick a note, then choose whether the link should require a password before it can be opened.
+        </Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.notePickerRow}>
+          {app.summaries.map((note) => (
+            <Pressable
+              key={note.id}
+              onPress={() => props.onSelectNote(note.id)}
+              style={[
+                styles.notePickerChip,
+                note.id === props.selectedNoteId ? styles.notePickerChipActive : null
+              ]}
+            >
+              <Text
+                numberOfLines={1}
+                style={[
+                  styles.notePickerChipText,
+                  note.id === props.selectedNoteId ? styles.notePickerChipTextActive : null
+                ]}
+              >
+                {note.title}
+              </Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+        <View style={styles.shareComposerCard}>
+          <Text style={styles.shareComposerTitle}>
+            {selectedSummary ? selectedSummary.title : "Select a note to share"}
+          </Text>
+          <Text style={styles.shareComposerMeta}>
+            {selectedSummary
+              ? `${selectedSummary.format.toUpperCase()} · updated ${new Date(selectedSummary.updatedAt).toLocaleDateString()}`
+              : "The share action will open the password dialog."}
+          </Text>
+          <Pressable
+            disabled={!selectedSummary || app.loading}
+            onPress={props.onCreateShare}
+            style={styles.accentButton}
+          >
+            <Text style={styles.primaryButtonText}>
+              {app.loading ? "Preparing..." : "Share selected note"}
+            </Text>
+          </Pressable>
+        </View>
+      </View>
+
+      <View style={styles.inspectorSection}>
+        <Text style={styles.sectionTitle}>Shared notes</Text>
+        {app.shareHistory.length > 0 ? (
+          <View style={styles.shareHistoryList}>
+            {app.shareHistory.map((share) => (
+              <View key={share.id} style={styles.shareHistoryCard}>
+                <View style={styles.shareHistoryHeader}>
+                  <View style={styles.shareHistoryTitleBlock}>
+                    <Text numberOfLines={1} style={styles.shareHistoryTitle}>
+                      {share.noteTitle}
+                    </Text>
+                    <Text style={styles.shareHistoryMeta}>
+                      {share.passwordProtected ? "Password protected" : "Open access"} ·{" "}
+                      {new Date(share.createdAt).toLocaleDateString()}
+                    </Text>
+                  </View>
+                  <Pressable onPress={() => void props.onCopyLink(share.shareUrl)} style={styles.linkChip}>
+                    <Text style={styles.linkChipText}>Copy link</Text>
+                  </Pressable>
+                </View>
+                <Text numberOfLines={1} style={styles.shareHistoryUrl}>
+                  {share.shareUrl}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : (
+          <View style={styles.emptyPanel}>
+            <Text style={styles.emptyPanelText}>No shared notes yet.</Text>
+          </View>
+        )}
+      </View>
+
       {renderShareAccessSection(app)}
-      {renderLatestShareSection(app)}
       {renderOpenedShareSection(app)}
     </ScrollView>
   );
@@ -706,11 +1115,26 @@ function renderSidebar(app: ReturnType<typeof useNotesApp>, noteCount: number) {
 function renderEditor(
   app: ReturnType<typeof useNotesApp>,
   activeSummary: NoteSummary | null,
-  isTablet: boolean
+  isTablet: boolean,
+  actions?: {
+    onDelete(): void;
+    onShare(): void;
+  }
 ) {
   return (
     <>
       <View style={styles.editorHeader}>
+        {app.activeStoredNote ? (
+          <View style={styles.editorUtilityRow}>
+            <Pressable onPress={actions?.onShare} style={styles.secondaryButtonCompact}>
+              <Text style={styles.secondaryButtonText}>Share</Text>
+            </Pressable>
+            <Pressable onPress={actions?.onDelete} style={styles.destructiveButtonInline}>
+              <Text style={styles.destructiveButtonText}>Delete</Text>
+            </Pressable>
+          </View>
+        ) : null}
+
         <View>
           <Text style={styles.editorTitle}>
             {app.activeStoredNote ? "Current note" : "Start a secure note"}
@@ -901,18 +1325,18 @@ function renderShareCreateSection(app: ReturnType<typeof useNotesApp>) {
     <View style={styles.inspectorSection}>
       <Text style={styles.sectionTitle}>Share panel</Text>
       <Text style={styles.panelCopy}>
-        Share creation encrypts note content again with the share password before sending it to the API.
+        Leave the password blank for an open share, or set one to protect the link before it goes to the API.
       </Text>
       <TextInput
         onChangeText={app.setSharePassword}
-        placeholder="Share password"
+        placeholder="Optional share password"
         placeholderTextColor={colors.textSoft}
         secureTextEntry
         style={styles.inlineInput}
         value={app.sharePassword}
       />
       <Pressable onPress={() => void app.openSharePreview()} style={styles.accentButton}>
-        <Text style={styles.primaryButtonText}>Create secure share</Text>
+        <Text style={styles.primaryButtonText}>Create share</Text>
       </Pressable>
     </View>
   );
@@ -932,7 +1356,7 @@ function renderShareAccessSection(app: ReturnType<typeof useNotesApp>) {
       />
       <TextInput
         onChangeText={app.setShareAccessPassword}
-        placeholder="Share password"
+        placeholder="Password if required"
         placeholderTextColor={colors.textSoft}
         secureTextEntry
         style={styles.inlineInput}
@@ -1198,10 +1622,14 @@ const styles = StyleSheet.create({
     minWidth: 66,
     paddingHorizontal: 14
   },
-  headerMenuButtonText: {
-    color: colors.text,
-    fontSize: 12,
-    fontWeight: "700"
+  headerMenuIcon: {
+    gap: 4
+  },
+  headerMenuLine: {
+    backgroundColor: colors.text,
+    borderRadius: 999,
+    height: 2,
+    width: 16
   },
   mobileHeaderBody: {
     flex: 1,
@@ -1252,6 +1680,13 @@ const styles = StyleSheet.create({
     right: 0,
     top: 0
   },
+  backdropPressable: {
+    bottom: 0,
+    left: 0,
+    position: "absolute",
+    right: 0,
+    top: 0
+  },
   mobileDrawer: {
     backgroundColor: colors.bgElevated,
     borderColor: colors.borderStrong,
@@ -1264,7 +1699,7 @@ const styles = StyleSheet.create({
     paddingTop: 24,
     position: "absolute",
     top: 0,
-    width: "82%"
+    width: 308
   },
   mobileDrawerContent: {
     flex: 1,
@@ -1446,6 +1881,100 @@ const styles = StyleSheet.create({
     gap: 14,
     paddingBottom: 16
   },
+  notePickerRow: {
+    gap: 8,
+    paddingBottom: 2
+  },
+  notePickerChip: {
+    backgroundColor: colors.bgElevated,
+    borderColor: colors.border,
+    borderRadius: 999,
+    borderWidth: 1,
+    justifyContent: "center",
+    maxWidth: 180,
+    minHeight: 36,
+    paddingHorizontal: 14
+  },
+  notePickerChipActive: {
+    backgroundColor: colors.primaryStrong,
+    borderColor: colors.primaryStrong
+  },
+  notePickerChipText: {
+    color: colors.textSoft,
+    fontSize: 12,
+    fontWeight: "700"
+  },
+  notePickerChipTextActive: {
+    color: colors.text
+  },
+  shareComposerCard: {
+    backgroundColor: colors.bgElevated,
+    borderColor: colors.border,
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 12,
+    padding: 12
+  },
+  shareComposerTitle: {
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: "700"
+  },
+  shareComposerMeta: {
+    color: colors.textSoft,
+    fontSize: 12,
+    lineHeight: 18
+  },
+  shareHistoryList: {
+    gap: 10
+  },
+  shareHistoryCard: {
+    backgroundColor: colors.bgElevated,
+    borderColor: colors.border,
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 10,
+    padding: 12
+  },
+  shareHistoryHeader: {
+    alignItems: "flex-start",
+    flexDirection: "row",
+    gap: 10,
+    justifyContent: "space-between"
+  },
+  shareHistoryTitleBlock: {
+    flex: 1,
+    minWidth: 0
+  },
+  shareHistoryTitle: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: "700"
+  },
+  shareHistoryMeta: {
+    color: colors.textSoft,
+    fontSize: 12,
+    marginTop: 4
+  },
+  shareHistoryUrl: {
+    color: colors.textMuted,
+    fontSize: 12
+  },
+  linkChip: {
+    alignItems: "center",
+    backgroundColor: colors.panel,
+    borderColor: colors.border,
+    borderRadius: 999,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 34,
+    paddingHorizontal: 12
+  },
+  linkChipText: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: "700"
+  },
   authCard: {
     backgroundColor: colors.bgElevated,
     borderColor: colors.border,
@@ -1523,6 +2052,11 @@ const styles = StyleSheet.create({
   editorHeader: {
     gap: 12,
     marginBottom: 16
+  },
+  editorUtilityRow: {
+    flexDirection: "row",
+    gap: 8,
+    justifyContent: "flex-end"
   },
   editorTitle: {
     color: colors.text,
@@ -1646,6 +2180,39 @@ const styles = StyleSheet.create({
   secondaryButtonText: {
     color: colors.text,
     fontSize: 14,
+    fontWeight: "700"
+  },
+  destructiveButtonInline: {
+    alignItems: "center",
+    backgroundColor: "rgba(255, 107, 107, 0.12)",
+    borderColor: colors.danger,
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 44,
+    paddingHorizontal: 16
+  },
+  destructiveButton: {
+    alignItems: "center",
+    backgroundColor: colors.danger,
+    borderRadius: 8,
+    justifyContent: "center",
+    minHeight: 44,
+    paddingHorizontal: 16
+  },
+  destructiveButtonText: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: "700"
+  },
+  ghostButton: {
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 42
+  },
+  ghostButtonText: {
+    color: colors.textSoft,
+    fontSize: 13,
     fontWeight: "700"
   },
   actionColumn: {
@@ -1777,6 +2344,52 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 13,
     fontWeight: "600"
+  },
+  modalBackdrop: {
+    alignItems: "center",
+    backgroundColor: colors.overlay,
+    flex: 1,
+    justifyContent: "center",
+    paddingHorizontal: 18
+  },
+  modalCard: {
+    backgroundColor: colors.bgElevated,
+    borderColor: colors.borderStrong,
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 14,
+    maxWidth: 420,
+    padding: 18,
+    width: "100%"
+  },
+  modalTitle: {
+    color: colors.text,
+    fontSize: 21,
+    fontWeight: "800"
+  },
+  modalCopy: {
+    color: colors.textMuted,
+    fontSize: 14,
+    lineHeight: 21
+  },
+  modalActionColumn: {
+    gap: 10
+  },
+  modalErrorText: {
+    color: colors.warning,
+    fontSize: 12
+  },
+  shareResultLinkCard: {
+    backgroundColor: colors.panel,
+    borderColor: colors.border,
+    borderRadius: 8,
+    borderWidth: 1,
+    padding: 12
+  },
+  shareResultLinkText: {
+    color: colors.text,
+    fontSize: 13,
+    lineHeight: 19
   },
   emptyPanel: {
     alignItems: "center",

@@ -10,6 +10,7 @@ import type {
 } from "@notesync/shared-types";
 import { convertNoteContent } from "@notesync/note-domain";
 import { LocalNoteRepository } from "../data/local-note-repository";
+import type { ShareHistoryEntry } from "../data/local-note-web-state";
 import {
   accessRemoteShare,
   ApiClientError,
@@ -24,6 +25,7 @@ import {
   register,
   updateRemoteNote
 } from "../lib/api-client";
+import { API_BASE_URL } from "../lib/app-config";
 import {
   clearStoredAuthState,
   readStoredAuthState,
@@ -62,6 +64,17 @@ interface AuthFormState {
   displayName: string;
 }
 
+interface ShareHistoryItem {
+  id: string;
+  noteId: string;
+  noteTitle: string;
+  shareSlug: string;
+  shareUrl: string;
+  passwordProtected: boolean;
+  maxViews?: number;
+  createdAt: string;
+}
+
 export function useNotesApp() {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -79,6 +92,7 @@ export function useNotesApp() {
   const [loading, setLoading] = useState(false);
   const [deviceSecret, setDeviceSecret] = useState<string | null>(null);
   const [summaries, setSummaries] = useState<NoteSummary[]>([]);
+  const [shareHistory, setShareHistory] = useState<ShareHistoryItem[]>([]);
   const [authMode, setAuthMode] = useState<AuthMode>("register");
   const [authForm, setAuthForm] = useState<AuthFormState>({
     email: "demo@notesync.local",
@@ -151,6 +165,7 @@ export function useNotesApp() {
       }
 
       await refreshSummaries(deviceSecret);
+      await refreshShareHistory();
 
       setActiveNoteId(savedNote.id);
       setActiveStoredNote({
@@ -171,61 +186,15 @@ export function useNotesApp() {
   async function createShare() {
     if (!activeStoredNote) {
       setStatusMessage("Open a note before creating a share.");
-      return;
+      return null;
     }
 
-    if (!sharePassword.trim()) {
-      setStatusMessage("A share password is required for secure remote sharing.");
-      return;
-    }
-
-    const nextAuthState = await ensureFreshAuthState();
-    if (!nextAuthState) {
-      setStatusMessage("Sign in before creating a live share.");
-      return;
-    }
-
-    setLoading(true);
-    setStatusMessage(null);
-
-    try {
-      const shareSourceNote: NoteRecord = {
-        ...activeStoredNote.note,
-        title: draft.title.trim() || activeStoredNote.note.title,
-        format: draft.format,
-        updatedAt: new Date().toISOString()
-      };
-
-      await pushNoteToRemote(shareSourceNote, draft.content, nextAuthState);
-      const shareEncryptedContent = await encryptNoteContent(
-        draft.content,
-        sharePassword
-      );
-
-      const share = await createRemoteShare(nextAuthState.session.tokens.accessToken, {
-        noteId: shareSourceNote.id,
-        title: shareSourceNote.title,
-        format: shareSourceNote.format,
-        encryptedContent: shareEncryptedContent,
-        password: sharePassword,
-        maxViews: 25
-      });
-
-      await repository.recordShareHistory(activeStoredNote.note.id, share);
-      setSharePreview(share);
-      setShareSlug(share.slug);
-      setScreen("share");
-      setStatusMessage("Secure share created.");
-    } catch (cause) {
-      setStatusMessage(getErrorMessage(cause));
-    } finally {
-      setLoading(false);
-    }
+    return createShareForNote(activeStoredNote.note.id, sharePassword);
   }
 
   async function accessSharedNote() {
-    if (!shareSlug.trim() || !shareAccessPassword.trim()) {
-      setStatusMessage("Share slug and password are required.");
+    if (!shareSlug.trim()) {
+      setStatusMessage("Share slug is required.");
       return;
     }
 
@@ -233,8 +202,9 @@ export function useNotesApp() {
     setStatusMessage(null);
 
     try {
-      const response = await accessRemoteShare(shareSlug.trim(), shareAccessPassword);
-      const content = await decryptNoteContent(response.encryptedContent, shareAccessPassword);
+      const trimmedPassword = shareAccessPassword.trim();
+      const response = await accessRemoteShare(shareSlug.trim(), trimmedPassword || undefined);
+      const content = await decryptNoteContent(response.encryptedContent, trimmedPassword);
       setAccessedShare({
         slug: response.share.slug,
         title: response.share.title,
@@ -323,6 +293,7 @@ export function useNotesApp() {
       }
 
       await refreshSummaries(deviceSecret);
+      await refreshShareHistory();
       if (activeNoteId) {
         await openNote(activeNoteId, deviceSecret);
       }
@@ -429,6 +400,7 @@ export function useNotesApp() {
       await writeStoredAuthState(nextAuthState);
       setAuthState(nextAuthState);
       setSyncEnabled(true);
+      await refreshShareHistory();
       setStatusMessage(authMode === "register" ? "Account created." : "Signed in.");
       return true;
     } catch (cause) {
@@ -452,8 +424,47 @@ export function useNotesApp() {
       await clearStoredAuthState();
       setAuthState(null);
       setSyncEnabled(false);
+      await refreshShareHistory();
       setLoading(false);
       setStatusMessage("Signed out.");
+    }
+  }
+
+  async function deleteNote(noteId?: string) {
+    const targetNoteId = noteId ?? activeNoteId;
+    const secret = deviceSecret;
+    if (!targetNoteId || !secret) {
+      setStatusMessage("Open a note before deleting it.");
+      return false;
+    }
+
+    setLoading(true);
+    setStatusMessage(null);
+
+    try {
+      await repository.remove(targetNoteId);
+      const nextSummaries = await repository.listSummaries(secret);
+      setSummaries(nextSummaries);
+      await refreshShareHistory();
+
+      if (nextSummaries.length > 0) {
+        await openNote(nextSummaries[0].id, secret, "list");
+      } else {
+        setActiveNoteId(null);
+        setActiveStoredNote(undefined);
+        setDraft(createEmptyDraft());
+        setSyncEnabled(Boolean(authState));
+        setScreen("list");
+      }
+
+      setSharePreview(null);
+      setStatusMessage("Note deleted.");
+      return true;
+    } catch (cause) {
+      setStatusMessage(getErrorMessage(cause));
+      return false;
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -485,6 +496,7 @@ export function useNotesApp() {
     encryptedNoteCount,
     syncedNoteCount,
     summaries,
+    shareHistory,
     activeStoredNote,
     sharePreview,
     sharePassword,
@@ -507,11 +519,13 @@ export function useNotesApp() {
     editNote,
     saveNote,
     createShare,
+    createShareForNote,
     openSharePreview,
     accessSharedNote,
     syncNow,
     exportActiveNote,
     rotateDeviceKey,
+    deleteNote,
     submitAuth,
     signOut,
     changeFormat
@@ -545,6 +559,7 @@ export function useNotesApp() {
       }
 
       setSummaries(currentSummaries);
+      await refreshShareHistory();
       setReady(true);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "Unknown initialization error";
@@ -558,6 +573,16 @@ export function useNotesApp() {
   async function refreshSummaries(secretOverride?: string) {
     const nextSummaries = await repository.listSummaries(secretOverride ?? deviceSecret ?? undefined);
     setSummaries(nextSummaries);
+  }
+
+  async function refreshShareHistory() {
+    const [entries, notes] = await Promise.all([
+      repository.listShareHistory(),
+      repository.listAllNotes()
+    ]);
+
+    const noteMap = new Map(notes.map((note) => [note.id, note]));
+    setShareHistory(entries.map((entry) => mapShareHistoryItem(entry, noteMap.get(entry.noteId))));
   }
 
   async function openNote(
@@ -588,6 +613,84 @@ export function useNotesApp() {
       format: note.format
     });
     setScreen(nextScreen);
+  }
+
+  async function createShareForNote(noteId: string, password?: string) {
+    const nextAuthState = await ensureFreshAuthState();
+    if (!nextAuthState) {
+      setStatusMessage("Sign in before creating a live share.");
+      return null;
+    }
+
+    setLoading(true);
+    setStatusMessage(null);
+
+    try {
+      const shareSource = await resolveShareSource(noteId);
+      if (!shareSource) {
+        setStatusMessage("Could not find the selected note.");
+        return null;
+      }
+
+      await pushNoteToRemote(shareSource.note, shareSource.content, nextAuthState);
+
+      const normalizedPassword = password?.trim() ?? "";
+      const shareEncryptedContent = await encryptNoteContent(
+        shareSource.content,
+        normalizedPassword
+      );
+
+      const share = await createRemoteShare(nextAuthState.session.tokens.accessToken, {
+        noteId: shareSource.note.id,
+        title: shareSource.note.title,
+        format: shareSource.note.format,
+        encryptedContent: shareEncryptedContent,
+        password: normalizedPassword || undefined,
+        maxViews: 25
+      });
+
+      await repository.recordShareHistory(shareSource.note.id, share);
+      setSharePreview(share);
+      setShareSlug(share.slug);
+      await refreshShareHistory();
+      setStatusMessage(normalizedPassword ? "Protected share created." : "Share link created.");
+      return {
+        ...share,
+        url: resolveShareUrl(share.url)
+      };
+    } catch (cause) {
+      setStatusMessage(getErrorMessage(cause));
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function resolveShareSource(noteId: string) {
+    const secret = deviceSecret;
+    if (!secret) {
+      return null;
+    }
+
+    if (activeStoredNote?.note.id === noteId) {
+      return {
+        note: {
+          ...activeStoredNote.note,
+          title: draft.title.trim() || activeStoredNote.note.title,
+          format: draft.format,
+          updatedAt: new Date().toISOString()
+        },
+        content: draft.content
+      };
+    }
+
+    const note = await repository.getById(noteId);
+    if (!note) {
+      return null;
+    }
+
+    const content = await decryptNoteContent(note.encryptedContent, secret);
+    return { note, content };
   }
 
   async function ensureFreshAuthState(): Promise<StoredAuthState | null> {
@@ -679,6 +782,27 @@ export function useNotesApp() {
       throw cause;
     }
   }
+}
+
+function resolveShareUrl(urlOrPath: string): string {
+  if (/^https?:\/\//i.test(urlOrPath)) {
+    return urlOrPath;
+  }
+
+  return `${API_BASE_URL}${urlOrPath.startsWith("/") ? "" : "/"}${urlOrPath}`;
+}
+
+function mapShareHistoryItem(entry: ShareHistoryEntry, note?: NoteRecord): ShareHistoryItem {
+  return {
+    id: entry.id,
+    noteId: entry.noteId,
+    noteTitle: note?.title?.trim() || "Deleted note",
+    shareSlug: entry.shareSlug,
+    shareUrl: resolveShareUrl(`/shares/${entry.shareSlug}`),
+    passwordProtected: entry.passwordProtected,
+    maxViews: entry.maxViews,
+    createdAt: entry.createdAt
+  };
 }
 
 function getErrorMessage(cause: unknown): string {

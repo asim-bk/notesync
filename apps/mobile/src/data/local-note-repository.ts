@@ -17,6 +17,7 @@ import {
   type NoteVersionEntry,
   type PendingSyncQueueItem,
   SCHEMA_VERSION,
+  type ShareHistoryEntry,
   type SqliteNoteRow,
   upsertWebNoteState,
   type WebLocalState,
@@ -400,6 +401,33 @@ export class LocalNoteRepository {
         new Date().toISOString()
       ]
     );
+  }
+
+  async listShareHistory(): Promise<ShareHistoryEntry[]> {
+    await this.initialize();
+
+    if (Platform.OS === "web") {
+      return [...this.webState.shareHistory].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    }
+
+    const rows = await this.getDatabase().getAllAsync<
+      Omit<ShareHistoryEntry, "passwordProtected"> & { passwordProtected: number }
+    >(
+      `SELECT
+        id,
+        note_id as noteId,
+        share_slug as shareSlug,
+        password_protected as passwordProtected,
+        max_views as maxViews,
+        created_at as createdAt
+      FROM share_history
+      ORDER BY created_at DESC`
+    );
+
+    return rows.map((row) => ({
+      ...row,
+      passwordProtected: row.passwordProtected === 1
+    }));
   }
 
   private async listRows(): Promise<SqliteNoteRow[]> {
