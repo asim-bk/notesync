@@ -1,53 +1,81 @@
 # NoteSync
 
-NoteSync, notlari cihazda sifreleyerek saklayan, istenirse hesap ile senkronize eden ve secili notlari guvenli linklerle paylasabilen local-first bir not platformudur.
+NoteSync, notlari cihazda sifreleyerek saklayan, istenirse hesap ile senkronize eden ve secili notlari guvenli baglantilarla paylasabilen local-first bir not platformudur.
 
+## Proje Bilgileri
 
-## Proje Ozeti
+| Alan | Bilgi |
+| --- | --- |
+| Proje adi | NoteSync |
+| Ogrenci adi | Asım Baki |
+| Ogrenci soyadi | Demir |
+| Ogrenci numarasi | 24010501040 |
+| GitHub repo baglantisi | https://github.com/asim-bk/notesync.git |
 
-Hedef problem:
+## Projenin Amaci ve Kisa Aciklamasi
 
-- tam bulut tabanli not uygulamalarinda veri gizliligi riski
-- sadece offline calisan uygulamalarda paylasim ve es zamanlama eksikligi
+Bu projenin amaci, kullanicilarin notlarini cihaz bazli sifreleme ile guvenli sekilde saklayabilmesini, isterlerse hesaplariyla senkronize edebilmesini ve secili notlari kontrollu bicimde paylasabilmesini saglamaktir.
+
+Cozulen temel problem:
+
+- tam bulut tabanli not uygulamalarinda veri gizliligi riski bulunmasi
+- sadece offline calisan uygulamalarda senkronizasyon ve paylasim imkaninin zayif kalmasi
 
 NoteSync bu problemi hibrit veri modeli ile cozer:
 
-- not icerigi once cihazda sifrelenir ve yerelde saklanir
-- kullanici isterse hesaba bagli senkronizasyon kullanir
-- secili notlar guvenli API uzerinden link ile paylasilabilir
+- not icerigi once cihazda sifrelenir
+- veri yerelde saklanir
+- kullanici isterse API uzerinden hesap bagli senkronizasyon kullanir
+- secili notlar paylasim baglantisi ile dis dunyaya acilabilir
 
-Hedef kullanicilar:
+## Hedef Kitle
 
 - ogrenciler
-- akademik veya profesyonel calisma yurutup not tutanlar
+- akademik veya profesyonel not tutan kullanicilar
 - veri gizliligine onem veren bireyler
+- ortak calisma yaparken secili icerikleri paylasmak isteyen ekipler
 
-## Mevcut Teknoloji Yigini
+## Kullanilan Teknolojiler / Kutuphaneler
 
-Projede su anda kullanilan teknoloji:
+| Katman | Teknoloji / Kutuphane |
+| --- | --- |
+| Mobil istemci | React Native, Expo SDK 53, TypeScript |
+| Web onizleme | react-native-web, React 19 |
+| Yerel veri saklama | expo-sqlite |
+| Guvenli cihaz depolamasi | expo-secure-store |
+| API | Node.js, Fastify, TypeScript |
+| Kimlik dogrulama | JWT tabanli access + refresh token yapisi |
+| Veritabani | MySQL, Prisma |
+| Sifreleme | AES-256-GCM |
+| Dosya export | pdf-lib, docx |
+| Paylasim araclari | expo-sharing, expo-clipboard |
+| Monorepo ortak paketleri | packages/shared-types, packages/note-domain, packages/crypto-core |
+| Yardimci araclar | Docker, EAS Build |
 
-- mobil istemci: `React Native`, `Expo SDK 53`, `TypeScript`
-- web onizleme: `react-native-web`
-- yerel veri: native tarafta `expo-sqlite`, web tarafinda browser local persistence
-- cihaz sirri: `expo-secure-store`
-- API: `Node.js`, `Fastify`, `TypeScript`
-- kimlik dogrulama: `JWT` tabanli access + refresh token akisi
-- merkezi veritabani: `MySQL` + `Prisma`
-- sifreleme: `AES-256-GCM`
-- belge export: `pdf-lib`, `docx`
-- paylasim/kopyalama: `expo-sharing`, `expo-clipboard`
-- ortak paketler:
-  - `packages/shared-types`
-  - `packages/note-domain`
-  - `packages/crypto-core`
+## Proje Mimarisi
 
-Not:
+Proje monorepo yapisinda organize edilmistir ve uc ana katmandan olusur:
 
-- Proje `React Native / Expo` tabanlidir.
-- `project.txt` icinde gecen mobil odak korunmustur.
-- Windows masaustu istemcisi bu repoda yoktur; ikinci asama hedefi olarak dusunulmelidir.
+1. `apps/mobile`
+   React Native + Expo tabanli istemci uygulamasidir. Not olusturma, duzenleme, sifreleme, export ve paylasim islemleri bu katmanda baslar.
+2. `apps/api`
+   Fastify tabanli API katmanidir. Kullanici girisi, token yonetimi, paylasim endpointleri ve opsiyonel senkronizasyon islemlerini yonetir.
+3. `packages/*`
+   Ortak tipler, domain kurallari ve sifreleme yardimcilari burada tutulur.
 
-## Repo Yapisi
+Veri akisi ozetle su sekildedir:
+
+`Kullanici -> Mobile/Web istemci -> Yerel sifreleme -> Yerel depolama -> Opsiyonel API senkronizasyonu -> MySQL`
+
+### Mimari Bilesenler
+
+- `apps/mobile`: istemci arayuzu, yerel veri saklama, export ve paylasim akislari
+- `apps/api`: auth, sync, share ve veri erisim endpointleri
+- `packages/shared-types`: ortak tipler ve API sozlesmeleri
+- `packages/note-domain`: not kurallari ve domain mantigi
+- `packages/crypto-core`: sifreleme / cozumleme yardimcilari
+
+### Repo Yapisi
 
 ```text
 .
@@ -65,90 +93,68 @@ Not:
 └── project.txt
 ```
 
-## Project.txt ile Uyumlu Mevcut Durum
+## Projenin Mevcut Durumu
 
 Su anda calisan ana ozellikler:
 
-- [x] Markdown, HTML ve RTF formatinda not olusturma ve duzenleme
-- [x] not icerigini cihazda `AES-256-GCM` ile sifreleyip saklama
-- [x] native SQLite / web local persistence
+- [x] not olusturma ve duzenleme
+- [x] not icerigini cihazda sifreleyip saklama
+- [x] native tarafta SQLite, web tarafinda local persistence kullanimi
 - [x] register / login / refresh / logout akisi
 - [x] hesap bagli manuel not senkronizasyonu
-- [x] uzaktan paylasim icin slug tabanli link uretimi
+- [x] slug tabanli paylasim baglantisi olusturma
 - [x] opsiyonel sifre korumali paylasim
-- [x] paylasim gecmisi, link kopyalama ve sistem paylasim diyalogu
 - [x] PDF / DOCX / Markdown / HTML / RTF export
-- [x] not silme
-- [x] mobil odakli arayuz, not gridi ve animasyonlu yan menu
-- [x] Expo web uzerinden Android SDK olmadan onizleme
+- [x] mobil odakli arayuz ve web onizleme
 
-Henuz bu repoda olmayan veya sonraki asamaya kalan kisimlar:
+Sonraki asamaya kalan veya bu repoda olmayan kisimlar:
 
-- [ ] masaustu istemcisi
+- [ ] Windows masaustu istemcisi
 - [ ] gelismis catisma cozum arayuzu
 - [ ] gercek zamanli ortak duzenleme
-- [ ] ileri seviye paylasim politikalarinin UI tarafinda genisletilmesi
+- [ ] daha gelismis paylasim politikasi ekrani
 
 ## Guvenlik Modeli
 
-`project.txt` icindeki guvenlik hedeflerine uygun mevcut model:
-
 - not icerigi once cihazda sifrelenir
 - paylasilmayan veri kullanicinin cihazinda kalir
-- hesap senkronizasyonunda sunucuya duz metin degil sifreli icerik gider
-- paylasilan notlar slug ile erisilir, UI uzerinden opsiyonel sifre korumasi eklenebilir
-- API tarafinda JWT tabanli oturum yonetimi vardir
-- cihaz anahtari native ortamda `expo-secure-store` ile tutulur
+- senkronizasyon sirasinda sunucuya sifreli icerik gonderilir
+- paylasilan notlar baglanti ile acilir, opsiyonel sifre korumasi eklenebilir
+- API tarafinda JWT tabanli oturum yonetimi kullanilir
+- cihaz sirlari native ortamda `expo-secure-store` ile tutulur
 
-## Tasarim ve UX Notlari
+## Kurulum Adimlari
 
-Mevcut mobil uygulama:
-
-- koyu gri tonlarda bir shell
-- kagit renginde not kartlari
-- mobil onceleyen ana not gridi
-- animasyonlu side drawer
-- editor icinden hizli paylasim ve silme
-- `Shared` ekranindan not secip paylasma ve gecmis linkleri kopyalama
-
-Bu, `project.txt` icindeki dark mode, minimalist ve fonksiyon odakli tasarim niyetine yakindir; ancak bugunku uygulama klasik mavi/lacivert yerine koyu gri + kagit tonlariyla ilerlemektedir.
-
-## Gelistirme Ortami
-
-Gerekenler:
+### Gereksinimler
 
 - Node.js
 - npm
-- Docker (kolay MySQL + API ayagi icin, opsiyonel)
+- Docker (opsiyonel ama hizli kurulum icin onerilir)
 
-Native build icin ayrica:
+Native build icin ek olarak:
 
 - Android Studio / Android SDK veya
 - Xcode / iOS toolchain
 
-Sadece web onizleme icin bunlar zorunlu degildir.
-
-## Kurulum
-
-### 1. Bagimliliklar
+### 1. Bagimliliklari kurma
 
 ```bash
 npm install
 ```
 
-### 2. En hizli baslangic: Docker ile API + MySQL
+### 2. Docker ile hizli kurulum
 
-Bu akista MySQL, Prisma migration ve demo seed birlikte ayaga kalkar:
+MySQL, Prisma migration ve demo seed birlikte ayaga kalkar:
 
 ```bash
 docker compose up --build
 ```
 
-API varsayilan olarak:
+API varsayilan olarak su adreste calisir:
 
 - `http://localhost:4000`
 
-### 3. API'yi Docker olmadan calistirma
+### 3. API'yi Docker olmadan kurma
 
 Ornek ortam dosyasini olustur:
 
@@ -156,22 +162,21 @@ Ornek ortam dosyasini olustur:
 cp apps/api/.env.example apps/api/.env
 ```
 
-Iki secenek var:
+Iki farkli secenek vardir:
 
 1. Hafiza tabanli gelistirme:
-
-- `STORE_PROVIDER=memory`
-- sonra:
 
 ```bash
 npm --workspace @notesync/api run dev
 ```
 
-2. MySQL + Prisma:
+`apps/api/.env` dosyasinda:
 
-- `STORE_PROVIDER=prisma`
-- `DATABASE_URL` degerini ayarla
-- sonra:
+```env
+STORE_PROVIDER=memory
+```
+
+2. MySQL + Prisma:
 
 ```bash
 npm --workspace @notesync/api run prisma:deploy
@@ -179,88 +184,87 @@ npm --workspace @notesync/api run seed
 npm --workspace @notesync/api run dev
 ```
 
-### 4. Mobil uygulamayi webde acma
+Bu senaryoda `apps/api/.env` icinde `STORE_PROVIDER=prisma` ve gecerli bir `DATABASE_URL` tanimli olmalidir.
 
-Android SDK olmadan web onizleme icin:
+## Calistirma / Kullanim Talimatlari
+
+### Web onizleme
+
+Android SDK olmadan web uzerinden calistirmak icin:
 
 ```bash
 EXPO_PUBLIC_API_BASE_URL=http://localhost:4000 npm run dev:web
 ```
 
-### 5. Expo gelistirme sunucusu
+### Mobil preview
 
-Mobil preview icin:
+Expo gelistirme sunucusunu baslatmak icin:
 
 ```bash
 npm run dev:mobile
 ```
 
-### 6. Testler
+### Testler
 
 ```bash
 npm test
 ```
 
-Bu komut sunlari calistirir:
+Bu komut su testleri calistirir:
 
 - domain testleri
 - API testleri
 - mobile local persistence testleri
 
-### 7. Build
+### Build
 
-Monorepo build:
+Monorepo build icin:
 
 ```bash
 npm run build
 ```
 
-Not:
+Native release icin `EAS Build` veya `expo prebuild` kullanilmalidir.
 
-- root `build` komutu ortak paketleri ve API'yi derler
-- mobile workspace icindeki `build` script'i native release bundle uretmez
-- native release icin `EAS Build` veya `expo prebuild` gerekir
+### Ornek Kullanim Akisi
 
-### 8. Web export
+1. API'yi ayaga kaldir.
+2. Mobil uygulamayi veya web onizlemeyi baslat.
+3. Kullanici kaydi olustur veya mevcut hesapla giris yap.
+4. Yeni not ekle, not icerigini kaydet ve yerel sifreleme ile sakla.
+5. Istenirse notu senkronize et veya paylasim baglantisi olustur.
+6. Istenirse notu PDF, DOCX, Markdown, HTML veya RTF olarak disa aktar.
 
-Statik web paketi almak icin:
+### Demo Hesap
 
-```bash
-cd apps/mobile
-npx expo export --platform web --output-dir .expo/web-export
-```
-
-## Demo Hesap
-
-Seed calistirildiginda varsayilan demo hesap:
+Seed verisi calistirildiginda varsayilan demo hesap:
 
 - email: `demo@notesync.local`
 - password: `DemoPass123!`
 
-## Gelistirme Scriptleri
+## Varsa Ekran Goruntuleri
 
-Root seviyesinde sik kullanilan komutlar:
+- Ana ekran:
+- Not editoru:
+- Paylasim ekrani:
+- Export ekrani:
 
-```bash
-npm run dev:api
-npm run dev:mobile
-npm run dev:web
-npm test
-npm run build
-```
+## Gelistirici Notlari
 
-## Dokumantasyon
+- Proje local-first yaklasimla tasarlanmistir.
+- Mobil istemci `Expo` uzerinden hem cihazda hem web onizlemede test edilebilir.
+- Windows masaustu istemcisi bu repoda bulunmamaktadir; sonraki asama hedefidir.
+- Ek mimari ve deployment notlari `docs/` klasoru altinda tutulmaktadir.
+- Odev tesliminde istenirse bu dokuman ayri olarak `ogrencino.md` adiyla kopyalanabilir.
 
-- mimari: [docs/architecture.md](docs/architecture.md)
-- deployment: [docs/deployment.md](docs/deployment.md)
-- uygulama plani: [docs/implementation-plan.md](docs/implementation-plan.md)
-- kaynak on rapor: [project.txt](project.txt)
+## Kaynakca veya Yararlanilan Baglantilar
 
-## Yol Haritasi
-
-`project.txt` dogrultusunda sonraki mantikli adimlar:
-
-1. sync conflict ekranlarini gelistirmek
-2. paylasim politikalarini zenginlestirmek
-3. masaustu istemcisi stratejisini netlestirmek
-4. daha guclu audit/log ve operasyonel izleme eklemek
+- GitHub repo: https://github.com/asim-bk/notesync.git
+- On rapor: [project.txt](project.txt)
+- Mimari dokumani: [docs/architecture.md](docs/architecture.md)
+- Deployment notlari: [docs/deployment.md](docs/deployment.md)
+- Uygulama plani: [docs/implementation-plan.md](docs/implementation-plan.md)
+- Expo dokumantasyonu: https://docs.expo.dev/
+- React Native dokumantasyonu: https://reactnative.dev/
+- Fastify dokumantasyonu: https://fastify.dev/
+- Prisma dokumantasyonu: https://www.prisma.io/docs
